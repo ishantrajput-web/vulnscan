@@ -1,0 +1,2 @@
+# Everything below is OPTIONAL. The scanner runs on the Python standard library alone.
+reportlab>=3.6      # PDF reports (HTML report is used automatically if missing)
