@@ -14,7 +14,7 @@ Runs on Windows, Linux/Kali and macOS with **no required dependencies**.
 ## Quick start
 **Windows (PowerShell)**
 ```powershell
-git clone https://github.com/YOUR_USERNAME/vulnscan.git
+git clone https://github.com/ishantrajput-web/vulnscan.git
 cd vulnscan
 py -m pip install reportlab        # optional, enables PDF
 py main.py --doctor
@@ -22,7 +22,7 @@ py main.py 192.168.1.0/24
 ```
 **Kali / Linux / macOS**
 ```bash
-git clone https://github.com/YOUR_USERNAME/vulnscan.git && cd vulnscan
+git clone https://github.com/ishantrajput-web/vulnscan.git && cd vulnscan
 pip install reportlab              # optional, enables PDF
 python3 main.py --doctor
 python3 main.py 192.168.1.0/24
