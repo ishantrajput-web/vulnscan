@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+reports/
+*.log
+.vulnscanner/
+.idea/
+.vscode/
+*.egg-info/
+dist/
+build/

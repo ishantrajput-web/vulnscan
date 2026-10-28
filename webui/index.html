@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VulnScan Dashboard</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo">&#9670;</span><b>VulnScan</b><small id="ver"></small></div>
+  <div class="pill" id="pill">Ready</div>
+</header>
+
+<div class="layout">
+<main>
+  <section class="card" id="newscan">
+    <h2>New scan</h2>
+    <label class="lbl" for="target">Target</label>
+    <input id="target" type="text" autocomplete="off" spellcheck="false"
+           placeholder="192.168.1.0/24   |   192.168.1.10   |   https://example.com">
+    <div class="hint"><span id="mode" class="chip">Enter a target</span>
+      <span class="muted">IP, range (10.0.0.5-20), CIDR, hostname or website URL. Mix with commas.</span></div>
+
+    <label class="lbl">Scan depth <span class="muted">(network targets)</span></label>
+    <div class="presets" id="presets">
+      <button type="button" class="preset active" data-p="quick"><b>Quick</b><span>~100 common ports</span></button>
+      <button type="button" class="preset" data-p="standard"><b>Standard</b><span>ports 1-1024</span></button>
+      <button type="button" class="preset" data-p="deep"><b>Deep</b><span>all 65535 ports (slow)</span></button>
+    </div>
+
+    <details class="adv"><summary>Advanced options</summary>
+      <div class="grid2">
+        <label>Custom ports <input id="ports" type="text" placeholder="e.g. 22,80,443,8000-8100"></label>
+        <label class="chk"><input id="offline" type="checkbox"> Offline CVE database only</label>
+        <label class="chk"><input id="nmap" type="checkbox"> Use Nmap if installed</label>
+        <label class="chk"><input id="cve" type="checkbox" checked> CVE lookup</label>
+        <label class="chk"><input id="web" type="checkbox" checked> Web analysis</label>
+        <label class="chk"><input id="noping" type="checkbox"> Skip ping (host blocks ICMP)</label>
+        <label class="chk"><input id="withports" type="checkbox"> Also port-scan a website's IP</label>
+      </div>
+    </details>
+
+    <div class="auth">
+      <label class="chk big"><input id="auth" type="checkbox"> I own this target or have <b>written permission</b> to test it.</label>
+      <div class="phrasebox">
+        <label class="lbl" for="phrase">Public / internet target? Type <code id="phrasehint">I HAVE PERMISSION</code></label>
+        <input id="phrase" type="text" autocomplete="off" placeholder="only needed for public targets">
+      </div>
+    </div>
+    <div id="formerr" class="err hidden"></div>
+    <button id="start" class="btn primary" type="button">Start scan</button>
+  </section>
+
+  <section class="card hidden" id="live">
+    <div class="row between"><h2 id="livetitle">Scan in progress</h2><button id="cancel" class="btn danger small" type="button">Cancel</button></div>
+    <div class="steps" id="steps"></div>
+    <div class="phase" id="phasename">Starting...</div>
+    <div class="bar"><div id="barfill" class="fill"></div></div>
+    <div class="row between muted"><span id="proglabel"></span><span id="elapsed"></span></div>
+    <pre class="term" id="term"></pre>
+  </section>
+
+  <section class="hidden" id="results"></section>
+</main>
+
+<aside>
+  <section class="card">
+    <div class="row between"><h2>History</h2><button id="refresh" class="btn ghost small" type="button">Refresh</button></div>
+    <div id="history" class="history"><div class="muted">No scans yet.</div></div>
+  </section>
+  <section class="card note">
+    <h3>What gets checked?</h3>
+    <p><b>Network:</b> live hosts, open ports, services &amp; versions, OS guess, known CVEs.</p>
+    <p><b>Websites:</b> HTTPS/TLS certificate, security headers, cookies, exposed files (.env, .git), technology versions, SPF/DMARC.</p>
+    <p class="muted">Passive and non-destructive. Only scan what you are allowed to.</p>
+  </section>
+</aside>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>
