@@ -14,13 +14,21 @@
 
 <div class="layout">
 <main>
+  <section class="card hidden" id="connection">
+    <h2>Connect to your scanner</h2>
+    <p id="cloudnote">Hosted mode scans one public website at a time. Network scans run in local mode.</p>
+    <label class="lbl" for="accesskey">Operator access key</label>
+    <input id="accesskey" type="password" autocomplete="current-password" placeholder="Your deployment access key">
+    <button id="connect" class="btn" type="button">Connect</button>
+    <p class="muted" id="connectionstatus" role="status"></p>
+  </section>
   <section class="card" id="newscan">
     <h2>New scan</h2>
     <label class="lbl" for="target">Target</label>
     <input id="target" type="text" autocomplete="off" spellcheck="false"
            placeholder="192.168.1.0/24   |   192.168.1.10   |   https://example.com">
     <div class="hint"><span id="mode" class="chip">Enter a target</span>
-      <span class="muted">IP, range (10.0.0.5-20), CIDR, hostname or website URL. Mix with commas.</span></div>
+      <span class="muted" id="targethint">IP, range (10.0.0.5-20), CIDR, hostname or website URL. Mix with commas.</span></div>
 
     <label class="lbl">Scan depth <span class="muted">(network targets)</span></label>
     <div class="presets" id="presets">
@@ -68,8 +76,10 @@
   <section class="card">
     <div class="row between"><h2>History</h2><button id="refresh" class="btn ghost small" type="button">Refresh</button></div>
     <div id="history" class="history"><div class="muted">No scans yet.</div></div>
+    <p class="muted hidden" id="historynote">Last 20 scans saved in this browser only. Clearing browser data removes them.</p>
+    <button id="clearhistory" class="btn ghost small hidden" type="button">Clear browser history</button>
   </section>
-  <section class="card note">
+  <section class="card note" id="checksnote">
     <h3>What gets checked?</h3>
     <p><b>Network:</b> live hosts, open ports, services &amp; versions, OS guess, known CVEs.</p>
     <p><b>Websites:</b> HTTPS/TLS certificate, security headers, cookies, exposed files (.env, .git), technology versions, SPF/DMARC.</p>

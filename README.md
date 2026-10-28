@@ -38,6 +38,35 @@ Redirects to other hosts are not followed. For deep application testing use OWAS
 per-asset details, history of past scans, and download buttons for every report format.
 Security: random per-run token, Host-header check (anti DNS-rebinding), strict CSP, no CORS, one scan at a time.
 
+## Free Vercel hosting (website mode)
+
+The repository includes an explicit WSGI entrypoint at `api/index.py` and `vercel.json` routing.
+Keep the Vercel project's **Root Directory** at the repository root. Push to `main` to deploy.
+This avoids treating the local CLI (`main.py`) as an HTTP application.
+
+Before scanning, set **SCANNER_ACCESS_TOKEN** to a random secret of at least 32 characters in
+each Vercel project's Environment Variables (Production and Preview as needed), then redeploy.
+Generate one locally with `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+Enter that secret in the dashboard's operator access field. Never commit it or share it publicly.
+Without this environment variable the dashboard loads but scanning stays locked.
+
+Hosted mode checks **one public HTTP(S) website on port 80 or 443** per request. The operator must
+confirm ownership/written permission and type `I HAVE PERMISSION`. Each scan has a 90-second worker
+timeout; there are no background jobs. Private/loopback/metadata addresses are rejected at every
+outbound connection, including after DNS changes and redirects. Responses include Word, PDF
+(when reportlab is available), HTML and JSON downloads. Temporary server-side files are removed
+after the response is prepared.
+
+The last 20 scans and their reports are saved in **this browser's IndexedDB**, not a cloud database.
+History survives reloads on the same browser and origin until cleared or evicted by the browser.
+Use **Clear browser history** to remove it; download important reports separately. If browser
+storage is unavailable, reports remain available for the current page session only.
+
+Network/port scans, Nmap, live background progress, email DNS checks and live NVD lookups remain
+available in **local mode**. Hosted mode uses the built-in offline CVE database. A Vercel server
+cannot scan your laptop's private LAN. Free hosting remains subject to Vercel Hobby usage limits;
+this mode does not require a paid backend or persistent disk.
+
 ## Reports
 `report_<id>.docx` (opens in Microsoft Word, **WPS Office**, LibreOffice, Google Docs), `.pdf`, `.html`, `.json`, plus `scan_<id>.log`
 in `reports/`. Compare two scans: `py main.py --compare old.json new.json`. CI gate: `--fail-on high` (exit code 4).

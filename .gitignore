@@ -10,3 +10,7 @@ reports/
 *.egg-info/
 dist/
 build/
+.env
+.env.*
+!.env.example
+.vercel/

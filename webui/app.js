@@ -11,9 +11,57 @@ try {
 } catch (e) { /* storage blocked */ }
 
 let preset = 'quick', info = {}, jobId = null, logN = 0, timer = null, selected = null;
+let cloud = false, connected = false, cloudBusy = false, cloudRecords = [], downloadUrls = [];
+const CLOUD_MIME = {json:'application/json',html:'text/html',pdf:'application/pdf',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'};
+
+function browserStore(action, record) {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('vulnscan-history', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('scans', {keyPath:'id'});
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result, tx = db.transaction('scans', action === 'read' ? 'readonly' : 'readwrite');
+      const store = tx.objectStore('scans'); let rows = [];
+      if (action === 'clear') store.clear();
+      else {
+        if (record) store.put(record);
+        const all = store.getAll();
+        all.onsuccess = () => {
+          rows = all.result.sort((a,b) => b.id.localeCompare(a.id));
+          if (action === 'save') rows.slice(20).forEach((r) => store.delete(r.id));
+          rows = rows.slice(0,20);
+        };
+      }
+      tx.oncomplete = () => { db.close(); resolve(rows); };
+      tx.onerror = tx.onabort = () => { db.close(); reject(tx.error || new Error('Browser storage unavailable')); };
+    };
+  });
+}
+
+function cloudHistory() {
+  return cloudRecords.map((r) => ({id:r.id,targets:r.result.targets,started:r.result.started,
+    assets:r.result.summary.assets,cves:r.result.summary.cves,levels:r.result.summary.host_levels,files:r.files}));
+}
+
+function reportLink(id, fmt) {
+  if (!cloud) return '/api/scans/' + encodeURIComponent(id) + '/download/' + fmt + '?t=' + encodeURIComponent(token);
+  const record = cloudRecords.find((r) => r.id === id);
+  if (!record || !record.reports[fmt]) return '';
+  const bytes = Uint8Array.from(atob(record.reports[fmt]), (c) => c.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], {type:CLOUD_MIME[fmt]}));
+  downloadUrls.push(url); return url;
+}
 
 async function api(path, opts) {
   opts = opts || {};
+  if (cloud && !opts.method) {
+    if (path === '/api/scans') return {scans:cloudHistory()};
+    if (path.startsWith('/api/scans/')) {
+      const record = cloudRecords.find((r) => r.id === path.split('/')[3]);
+      if (!record) throw new Error('This scan is no longer saved in this browser.');
+      return record.result;
+    }
+  }
   const r = await fetch(path, { method: opts.method || 'GET', headers: { 'X-Token': token, 'Content-Type': 'application/json' },
     body: opts.body ? JSON.stringify(opts.body) : undefined });
   let data = {};
@@ -27,6 +75,7 @@ const setPill = (txt, cls) => { const p = $('#pill'); p.textContent = txt; p.cla
 // ---------- form
 function detectMode() {
   const v = $('#target').value.trim(); const el = $('#mode');
+  if (cloud) { el.textContent = 'Public website scan'; return; }
   if (!v) { el.textContent = 'Enter a target'; return; }
   const hasUrl = /https?:\/\//i.test(v);
   const hasNet = v.split(/[,\s]+/).some((t) => t && !/^https?:\/\//i.test(t));
@@ -44,6 +93,7 @@ $('#target').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#sta
 function showErr(msg) { const e = $('#formerr'); e.textContent = msg; e.classList.toggle('hidden', !msg); }
 
 $('#start').addEventListener('click', async () => {
+  if (cloud) { await startCloudScan(); return; }
   showErr('');
   const custom = $('#ports').value.trim();
   const ports = custom || ({ quick: 'top', standard: 'well-known', deep: 'all' }[preset]);
@@ -60,6 +110,47 @@ $('#start').addEventListener('click', async () => {
 });
 $('#cancel').addEventListener('click', async () => { if (jobId) { try { await api('/api/jobs/' + jobId + '/cancel', { method: 'POST', body: {} }); } catch (e) { /* ignore */ } } });
 $('#refresh').addEventListener('click', loadHistory);
+$('#clearhistory').addEventListener('click', async () => {
+  try { await browserStore('clear'); cloudRecords = []; downloadUrls.forEach(URL.revokeObjectURL); downloadUrls = []; $('#results').classList.add('hidden'); $('#newscan').classList.remove('hidden'); await loadHistory(); }
+  catch (e) { showErr('Could not clear browser history: ' + e.message); }
+});
+$('#connect').addEventListener('click', connectCloud);
+$('#accesskey').addEventListener('keydown', (e) => { if (e.key === 'Enter') connectCloud(); });
+
+async function connectCloud() {
+  token = $('#accesskey').value.trim() || token;
+  try {
+    await api('/api/session'); connected = true;
+    try { sessionStorage.setItem('vs_t', token); } catch (e) { /* memory-only session */ }
+    $('#accesskey').value = ''; $('#connectionstatus').textContent = 'Connected. Access key stays in this browser session.';
+    $('#start').disabled = false; showErr(''); setPill('Ready', 'ok');
+  } catch (e) { connected = false; $('#start').disabled = true; $('#connectionstatus').textContent = e.message; setPill('Not connected', ''); }
+}
+
+async function startCloudScan() {
+  if (cloudBusy) return;
+  if (!connected) { showErr('Connect with your operator access key first.'); return; }
+  showErr(''); cloudBusy = true; $('#start').disabled = true;
+  $('#live').classList.remove('hidden'); $('#cancel').classList.add('hidden'); $('#term').textContent = '';
+  $('#livetitle').textContent = 'Website scan in progress'; $('#phasename').textContent = 'Checking website; results appear when complete (up to 90 seconds).';
+  $('#barfill').classList.add('indet'); $('#steps').textContent = ''; $('#proglabel').textContent = 'Keep this tab open.';
+  setPill('Scanning...', 'run'); const started = Date.now();
+  const ticker = setInterval(() => { $('#elapsed').textContent = Math.floor((Date.now()-started)/1000) + 's elapsed'; }, 500);
+  try {
+    const record = await api('/api/scan', {method:'POST',body:{target:$('#target').value,
+      authorized:$('#auth').checked,phrase:$('#phrase').value}});
+    cloudRecords.unshift(record); cloudRecords = cloudRecords.slice(0,20);
+    let storageWarning = '';
+    try { cloudRecords = await browserStore('save', record); }
+    catch (e) { storageWarning = 'Browser storage unavailable. Download reports now; this scan will be lost on reload.'; }
+    selected = record.id; renderResult(record.result, record.id, record.files); await loadHistory();
+    $('#newscan').classList.add('hidden'); $('#phasename').textContent = 'Website scan complete';
+    const webError = (record.result.webs || []).some((w) => w.error);
+    setPill(webError ? 'Website did not respond' : 'Done', webError ? '' : 'ok');
+    $('#term').textContent = [storageWarning].concat(record.notes || [], (record.result.webs || []).map((w) => w.error || '')).filter(Boolean).join('\n') || 'Reports ready. History is stored only in this browser.';
+  } catch (e) { showErr(e.message); $('#live').classList.add('hidden'); setPill('Scan failed', ''); if (e.code === 'auth') { connected = false; $('#connectionstatus').textContent = e.message; } }
+  finally { clearInterval(ticker); cloudBusy = false; $('#start').disabled = !connected; $('#barfill').classList.remove('indet'); }
+}
 
 // ---------- live view
 function beginLive(id) {
@@ -148,11 +239,12 @@ function webCard(w, open) {
   return '<details class="asset"' + (open ? ' open' : '') + '><summary>' + badge(w.risk_level) + '<b>' + esc(w.url) + '</b><span class="sub">website | score ' + esc(w.risk_score) + '/100</span></summary><div class="body">' + webBlock(w) + '</div></details>';
 }
 function renderResult(d, id, files) {
+  downloadUrls.forEach(URL.revokeObjectURL); downloadUrls = [];
   const s = d.summary || {}; const cs = s.cve_severity || {}, fs = s.finding_severity || {};
   const nfind = SEV.slice(0, 4).reduce((a, k) => a + (fs[k] || 0), 0);
   const names = { docx: 'Word / WPS (.docx)', pdf: 'PDF', html: 'HTML', json: 'JSON' };
   const dl = ['docx', 'pdf', 'html', 'json'].map((f) => (files || []).indexOf(f) >= 0
-    ? '<a class="btn" href="/api/scans/' + esc(id) + '/download/' + f + '?t=' + encodeURIComponent(token) + '">Download ' + esc(names[f]) + '</a>' : '').join('');
+    ? '<a class="btn" href="' + esc(reportLink(id, f)) + '" download="VulnScan_Report_' + esc(id) + '.' + f + '">Download ' + esc(names[f]) + '</a>' : '').join('');
   const hosts = (d.hosts || []).slice().sort((a, b) => b.risk_score - a.risk_score);
   const webs = d.webs || [];
   const cards = []; let first = true;
@@ -196,7 +288,23 @@ async function loadHistory() {
 
 // ---------- boot
 (async function boot() {
-  try { info = await api('/api/info'); $('#ver').textContent = 'v' + info.version; $('#phrasehint').textContent = info.phrase; }
+  try {
+    info = await api('/api/info'); $('#ver').textContent = 'v' + info.version; $('#phrasehint').textContent = info.phrase;
+    cloud = info.mode === 'serverless';
+    if (cloud) {
+      $('#connection').classList.remove('hidden'); $('#start').disabled = true;
+      $('#target').placeholder = 'https://your-website.com';
+      $('#targethint').textContent = 'One public HTTP(S) website on port 80 or 443. Private-network scans require local mode.';
+      $('#presets').previousElementSibling.classList.add('hidden'); $('#presets').classList.add('hidden'); $('.adv').classList.add('hidden');
+      $('#historynote').classList.remove('hidden'); $('#clearhistory').classList.remove('hidden');
+      $('#cloudnote').textContent = 'Website checks, offline CVE matching and report downloads. DNS email checks and network scans require local mode. History is stored in this browser.';
+      $('#checksnote').innerHTML = '<h3>Hosted website checks</h3><p>HTTPS/TLS, security headers, cookies, known exposure paths and technology versions with offline CVE matching.</p><p class="muted">One public website per scan. Only scan websites you own or have written permission to test. Network and email DNS checks require local mode.</p>';
+      try { cloudRecords = await browserStore('read'); } catch (e) { $('#historynote').textContent = 'Browser storage blocked. Download reports before closing this tab.'; }
+      if (!info.configured) $('#connectionstatus').textContent = 'Owner setup: set SCANNER_ACCESS_TOKEN (32+ characters) in Vercel Environment Variables and redeploy.';
+      else if (token) await connectCloud();
+      else $('#connectionstatus').textContent = 'Enter the access key configured by the deployment owner.';
+    }
+  }
   catch (e) { showErr('Cannot talk to the scanner (' + e.message + '). Start it with:  py main.py --ui  and open the printed link.'); }
   detectMode(); loadHistory();
 })();

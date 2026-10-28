@@ -13,7 +13,9 @@ html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 "Segoe U
 h2{margin:0 0 12px;font-size:18px}h3{margin:0 0 8px;font-size:15px}
 .lbl{display:block;margin:14px 0 6px;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em}
 .muted{color:var(--muted);font-size:12px;text-transform:none;letter-spacing:0}
-input[type=text]{width:100%;background:#0b1424;border:1px solid var(--line);color:var(--text);border-radius:10px;padding:12px 14px;font-size:15px;outline:none}
+input[type=text],input[type=password]{width:100%;background:#0b1424;border:1px solid var(--line);color:var(--text);border-radius:10px;padding:12px 14px;font-size:15px;outline:none}
+button:disabled,input:disabled{opacity:.5;cursor:not-allowed}
+#connect{margin-top:12px}
 input[type=text]:focus{border-color:var(--accent);box-shadow:0 0 0 3px #38bdf833}
 #target{font-size:17px;font-family:Consolas,Menlo,monospace}
 .hint{display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap}

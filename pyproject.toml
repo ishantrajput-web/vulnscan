@@ -1,0 +1,11 @@
+[project]
+name = "vulnscan"
+version = "2.0.0"
+requires-python = ">=3.9"
+dependencies = [
+  "reportlab>=3.6,<5; python_version < '3.10'",
+  "reportlab>=3.6; python_version >= '3.10'",
+]
+
+[tool.vercel]
+entrypoint = "api.index:app"

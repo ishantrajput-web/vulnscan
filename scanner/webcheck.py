@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import http.client
+import ipaddress
 import re
 import shutil
 import socket
@@ -69,9 +70,45 @@ def _ctx_unverified() -> ssl.SSLContext:
     return ctx
 
 
-def fetch(url: str, timeout: float = 6.0, max_body: int = MAX_BODY) -> Dict:
-    """One GET, no redirect following. Returns dict(status, headers[list of tuples], body, reason)."""
+def public_url(url: str):
+    """Validate the narrower URL surface accepted by the hosted scanner."""
+    if len(url) > 2048 or any(ord(c) <= 32 or ord(c) == 127 for c in url):
+        raise ValueError("Enter one public HTTP(S) URL without spaces or control characters.")
     parts = urllib.parse.urlsplit(url)
+    if (parts.scheme not in ("http", "https") or not parts.hostname or
+            parts.username is not None or parts.password is not None or
+            parts.port not in (None, 80, 443)):
+        raise ValueError("Hosted mode accepts one public HTTP(S) website on port 80 or 443, without credentials.")
+    return parts
+
+
+def _public_connection(address, timeout=3.0, source_address=None, **kwargs):
+    """Validate every DNS answer and connect to that exact IP (no DNS rebind gap)."""
+    host, port = address
+    answers = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    if not answers:
+        raise OSError("Host does not resolve")
+    for answer in answers:
+        ip = ipaddress.ip_address(answer[4][0])
+        effective = getattr(ip, "ipv4_mapped", None) or ip
+        if not effective.is_global:
+            raise OSError("Hosted scans cannot connect to private, loopback, reserved or metadata addresses.")
+    family, kind, proto, _, sockaddr = answers[0]
+    sock = socket.socket(family, kind, proto)
+    try:
+        sock.settimeout(timeout)
+        if source_address:
+            sock.bind(source_address)
+        sock.connect(sockaddr)
+        return sock
+    except BaseException:
+        sock.close()
+        raise
+
+
+def fetch(url: str, timeout: float = 6.0, max_body: int = MAX_BODY, public_only: bool = False) -> Dict:
+    """One GET, no redirect following. Returns dict(status, headers[list of tuples], body, reason)."""
+    parts = public_url(url) if public_only else urllib.parse.urlsplit(url)
     https = parts.scheme == "https"
     host = parts.hostname or ""
     port = parts.port or (443 if https else 80)
@@ -80,6 +117,8 @@ def fetch(url: str, timeout: float = 6.0, max_body: int = MAX_BODY) -> Dict:
         conn = http.client.HTTPSConnection(host, port, timeout=timeout, context=_ctx_unverified())
     else:
         conn = http.client.HTTPConnection(host, port, timeout=timeout)
+    if public_only:
+        conn._create_connection = _public_connection
     try:
         conn.request("GET", path, headers={"Host": parts.netloc, "User-Agent": UA, "Accept": "*/*",
                                            "Accept-Encoding": "identity", "Connection": "close"})
@@ -108,11 +147,12 @@ def _same_site(a: str, b: str) -> bool:
 
 
 # --------------------------------------------------------------------------- TLS
-def tls_info(host: str, port: int = 443, timeout: float = 6.0) -> Dict:
+def tls_info(host: str, port: int = 443, timeout: float = 6.0, public_only: bool = False) -> Dict:
     info: Dict = {"checked": True, "valid": None, "error": None}
+    connect = _public_connection if public_only else socket.create_connection
     try:
         ctx = ssl.create_default_context()
-        with socket.create_connection((host, port), timeout=timeout) as sock:
+        with connect((host, port), timeout=timeout) as sock:
             with ctx.wrap_socket(sock, server_hostname=host) as s:
                 info["valid"] = True
                 info["version"] = s.version()
@@ -128,7 +168,7 @@ def tls_info(host: str, port: int = 443, timeout: float = 6.0) -> Dict:
         return info
     if info["valid"] is False:   # still learn protocol/cipher from an unverified handshake
         try:
-            with socket.create_connection((host, port), timeout=timeout) as sock:
+            with connect((host, port), timeout=timeout) as sock:
                 with _ctx_unverified().wrap_socket(sock, server_hostname=host) as s:
                     info["version"] = s.version()
                     ci = s.cipher()
@@ -164,7 +204,7 @@ def tls_info(host: str, port: int = 443, timeout: float = 6.0) -> Dict:
             c.set_ciphers("ALL:@SECLEVEL=0")
             c.minimum_version = ver
             c.maximum_version = ver
-            with socket.create_connection((host, port), timeout=timeout) as sock:
+            with connect((host, port), timeout=timeout) as sock:
                 with c.wrap_socket(sock, server_hostname=host):
                     legacy.append(name)
         except Exception:
@@ -254,8 +294,8 @@ def _extract_techs(status_line: str, hmap: Dict[str, str], body: bytes, port: in
     return techs
 
 
-def analyze(url: str, timeout: float = 6.0, do_dns: bool = True) -> WebResult:
-    parts = urllib.parse.urlsplit(url)
+def analyze(url: str, timeout: float = 6.0, do_dns: bool = True, public_only: bool = False) -> WebResult:
+    parts = public_url(url) if public_only else urllib.parse.urlsplit(url)
     host = parts.hostname or ""
     w = WebResult(url=url)
     if parts.scheme not in ("http", "https") or not host:
@@ -274,7 +314,7 @@ def analyze(url: str, timeout: float = 6.0, do_dns: bool = True) -> WebResult:
     cur, resp = url, None
     try:
         for _ in range(6):
-            resp = fetch(cur, timeout)
+            resp = fetch(cur, timeout, public_only=public_only)
             loc = _hmap(resp["headers"]).get("location")
             if resp["status"] in (301, 302, 303, 307, 308) and loc:
                 nxt = urllib.parse.urljoin(cur, loc)
@@ -284,7 +324,7 @@ def analyze(url: str, timeout: float = 6.0, do_dns: bool = True) -> WebResult:
                     continue
                 w.redirects.append("(stopped: redirect leaves the target host)")
             break
-    except (OSError, http.client.HTTPException, ssl.SSLError) as e:
+    except (OSError, http.client.HTTPException, ssl.SSLError, ValueError) as e:
         w.error = "%s: %s" % (type(e).__name__, e)
         w.findings.append(Finding("info", "Web service did not respond as HTTP(S)", w.error[:200],
                                   "Verify the URL/port and that the service speaks HTTP."))
@@ -306,7 +346,7 @@ def analyze(url: str, timeout: float = 6.0, do_dns: bool = True) -> WebResult:
 
     # ---- transport security
     if is_https:
-        w.tls = tls_info(host, port, timeout)
+        w.tls = tls_info(host, port, timeout, public_only=public_only)
         tl = w.tls
         if tl.get("valid") is False:
             sev = "high" if public else "low"
@@ -331,7 +371,7 @@ def analyze(url: str, timeout: float = 6.0, do_dns: bool = True) -> WebResult:
         https_ok = None
         if (parts.port or 80) == 80 or parts.port is None:
             try:
-                r2 = fetch("https://%s/" % host, timeout, max_body=2048)
+                r2 = fetch("https://%s/" % host, timeout, max_body=2048, public_only=public_only)
                 https_ok = r2["status"] is not None
             except Exception:
                 https_ok = False
@@ -408,7 +448,7 @@ def analyze(url: str, timeout: float = 6.0, do_dns: bool = True) -> WebResult:
     def probe(item):
         path, rx, sev, title, fix = item
         try:
-            r = fetch(origin + path, timeout, max_body=4096)
+            r = fetch(origin + path, timeout, max_body=4096, public_only=public_only)
         except Exception:
             return None
         if r["status"] == 200 and re.search(rx, r["body"][:4096]):
