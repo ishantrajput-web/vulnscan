@@ -11,12 +11,13 @@ try {
 } catch (e) { /* storage blocked */ }
 
 let preset = 'quick', info = {}, jobId = null, logN = 0, timer = null, selected = null;
-let cloud = false, connected = false, cloudBusy = false, cloudRecords = [], downloadUrls = [];
+let cloud = false, cloudBusy = false, cloudRecords = [], downloadUrls = [], severityFilter = 'all';
 const CLOUD_MIME = {json:'application/json',html:'text/html',pdf:'application/pdf',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'};
 
 function browserStore(action, record) {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open('vulnscan-history', 1);
+    request.onblocked = () => reject(new Error('Close other scanner tabs to enable browser history.'));
     request.onupgradeneeded = () => request.result.createObjectStore('scans', {keyPath:'id'});
     request.onerror = () => reject(request.error);
     request.onsuccess = () => {
@@ -62,7 +63,7 @@ async function api(path, opts) {
       return record.result;
     }
   }
-  const r = await fetch(path, { method: opts.method || 'GET', headers: { 'X-Token': token, 'Content-Type': 'application/json' },
+  const r = await fetch(path, { method: opts.method || 'GET', headers: Object.assign({'Content-Type': 'application/json'}, cloud ? {} : {'X-Token':token}),
     body: opts.body ? JSON.stringify(opts.body) : undefined });
   let data = {};
   try { data = await r.json(); } catch (e) { /* not json */ }
@@ -70,7 +71,11 @@ async function api(path, opts) {
   return data;
 }
 const badge = (sev) => '<span class="badge s-' + esc(sev) + '">' + esc(String(sev).toUpperCase()) + '</span>';
-const setPill = (txt, cls) => { const p = $('#pill'); p.textContent = txt; p.className = 'pill ' + (cls || ''); };
+const setPill = (txt, cls) => {
+  const p = $('#pill'); p.textContent = txt; p.className = 'pill ' + (cls || '');
+  document.body.classList.toggle('scanning', cls === 'run');
+  $('.radar-state').textContent = cls === 'run' ? 'ASSESSING' : 'STANDBY';
+};
 
 // ---------- form
 function detectMode() {
@@ -114,42 +119,36 @@ $('#clearhistory').addEventListener('click', async () => {
   try { await browserStore('clear'); cloudRecords = []; downloadUrls.forEach(URL.revokeObjectURL); downloadUrls = []; $('#results').classList.add('hidden'); $('#newscan').classList.remove('hidden'); await loadHistory(); }
   catch (e) { showErr('Could not clear browser history: ' + e.message); }
 });
-$('#connect').addEventListener('click', connectCloud);
-$('#accesskey').addEventListener('keydown', (e) => { if (e.key === 'Enter') connectCloud(); });
-
-async function connectCloud() {
-  token = $('#accesskey').value.trim() || token;
-  try {
-    await api('/api/session'); connected = true;
-    try { sessionStorage.setItem('vs_t', token); } catch (e) { /* memory-only session */ }
-    $('#accesskey').value = ''; $('#connectionstatus').textContent = 'Connected. Access key stays in this browser session.';
-    $('#start').disabled = false; showErr(''); setPill('Ready', 'ok');
-  } catch (e) { connected = false; $('#start').disabled = true; $('#connectionstatus').textContent = e.message; setPill('Not connected', ''); }
-}
-
 async function startCloudScan() {
   if (cloudBusy) return;
-  if (!connected) { showErr('Connect with your operator access key first.'); return; }
+  if (!$('#auth').checked) { showErr('Confirm that you own this website or have written permission to test it.'); $('#auth').focus(); return; }
+  if ($('#phrase').value.trim().toUpperCase() !== info.phrase) { showErr('Type ' + info.phrase + ' to confirm permission.'); $('#phrase').focus(); return; }
+  let target = $('#target').value.trim();
+  if (target && !target.includes('://')) target = 'https://' + target;
+  try { const url = new URL(target); if (!['http:','https:'].includes(url.protocol) || url.username || url.password || (url.port && !['80','443'].includes(url.port))) throw new Error(); }
+  catch (e) { showErr('Enter one public HTTP(S) website, for example https://your-website.com.'); $('#target').focus(); return; }
+  $('#target').value = target;
   showErr(''); cloudBusy = true; $('#start').disabled = true;
+  $('#results').classList.add('hidden');
   $('#live').classList.remove('hidden'); $('#cancel').classList.add('hidden'); $('#term').textContent = '';
-  $('#livetitle').textContent = 'Website scan in progress'; $('#phasename').textContent = 'Checking website; results appear when complete (up to 90 seconds).';
-  $('#barfill').classList.add('indet'); $('#steps').textContent = ''; $('#proglabel').textContent = 'Keep this tab open.';
+  $('#livetitle').textContent = 'Reading the signals'; $('#phasename').textContent = 'Checking your website. Results arrive together when the assessment completes.';
+  $('#barfill').style.width = '0%'; $('#barfill').classList.add('indet'); $('#steps').textContent = ''; $('#proglabel').textContent = 'Keep this tab open · up to 90 seconds'; $('#elapsed').textContent = '0s elapsed';
   setPill('Scanning...', 'run'); const started = Date.now();
   const ticker = setInterval(() => { $('#elapsed').textContent = Math.floor((Date.now()-started)/1000) + 's elapsed'; }, 500);
   try {
-    const record = await api('/api/scan', {method:'POST',body:{target:$('#target').value,
+    const record = await api('/api/scan', {method:'POST',body:{target:target,
       authorized:$('#auth').checked,phrase:$('#phrase').value}});
     cloudRecords.unshift(record); cloudRecords = cloudRecords.slice(0,20);
     let storageWarning = '';
     try { cloudRecords = await browserStore('save', record); }
     catch (e) { storageWarning = 'Browser storage unavailable. Download reports now; this scan will be lost on reload.'; }
     selected = record.id; renderResult(record.result, record.id, record.files); await loadHistory();
-    $('#newscan').classList.add('hidden'); $('#phasename').textContent = 'Website scan complete';
+    $('#newscan').classList.add('hidden'); $('#phasename').textContent = 'Assessment finished. Review the evidence below.'; $('#proglabel').textContent = 'Reports ready to download';
     const webError = (record.result.webs || []).some((w) => w.error);
     setPill(webError ? 'Website did not respond' : 'Done', webError ? '' : 'ok');
     $('#term').textContent = [storageWarning].concat(record.notes || [], (record.result.webs || []).map((w) => w.error || '')).filter(Boolean).join('\n') || 'Reports ready. History is stored only in this browser.';
-  } catch (e) { showErr(e.message); $('#live').classList.add('hidden'); setPill('Scan failed', ''); if (e.code === 'auth') { connected = false; $('#connectionstatus').textContent = e.message; } }
-  finally { clearInterval(ticker); cloudBusy = false; $('#start').disabled = !connected; $('#barfill').classList.remove('indet'); }
+  } catch (e) { showErr(e.message); $('#live').classList.add('hidden'); setPill('Try again', ''); }
+  finally { clearInterval(ticker); cloudBusy = false; $('#start').disabled = false; $('#barfill').classList.remove('indet'); $('#barfill').style.width = '100%'; $('#elapsed').textContent = ((Date.now()-started)/1000).toFixed(1) + 's elapsed'; }
 }
 
 // ---------- live view
@@ -197,16 +196,15 @@ function bar(counts) {
 }
 function kv(rows) { return '<table>' + rows.map((r) => '<tr><th class="k">' + esc(r[0]) + '</th><td>' + esc(r[1]) + '</td></tr>').join('') + '</table>'; }
 function findingsTable(list) {
-  const f = list.filter((x) => x.severity !== 'info').sort((a, b) => SEV.indexOf(a.severity) - SEV.indexOf(b.severity));
+  const f = list.slice().sort((a, b) => SEV.indexOf(a.severity) - SEV.indexOf(b.severity));
   if (!f.length) return '';
-  return '<table><tr><th>Severity</th><th>Finding</th><th>Remediation</th></tr>' + f.map((x) =>
-    '<tr><td>' + badge(x.severity) + '</td><td><b>' + esc(x.title) + '</b><div class="sub">' + esc(x.detail) + '</div></td><td>' + esc(x.remediation) + '</td></tr>').join('') + '</table>';
+  return f.map((x) => '<article class="finding-card" data-severity="' + esc(x.severity) + '"><div class="finding-top">' + badge(x.severity) + '<h4>' + esc(x.title) + '</h4></div>' +
+    '<p>' + esc(x.detail) + '</p>' + (x.remediation ? '<div class="finding-fix"><div class="eyebrow">RECOMMENDED ACTION</div><p>' + esc(x.remediation) + '</p></div>' : '') + '</article>').join('');
 }
 function cveTable(list) {
   if (!list.length) return '';
-  const l = list.slice().sort((a, b) => (b.cvss || 0) - (a.cvss || 0)).slice(0, 25);
-  return '<table><tr><th>CVE</th><th>CVSS</th><th>Description</th></tr>' + l.map((v) =>
-    '<tr><td class="mono">' + esc(v.cve_id) + '<div class="sub">' + esc(v.source) + '</div></td><td>' + badge(v.severity) + ' ' + (v.cvss == null ? '' : esc(v.cvss)) + '</td><td>' + esc((v.description || '').slice(0, 300)) + '</td></tr>').join('') + '</table>';
+  const l = list.slice().sort((a, b) => (b.cvss || 0) - (a.cvss || 0));
+  return l.map((v) => '<article class="finding-card" data-severity="' + esc(v.severity) + '"><div class="finding-top">' + badge(v.severity) + '<h4>' + esc(v.cve_id) + (v.cvss == null ? '' : ' · CVSS ' + esc(v.cvss)) + '</h4></div><p>' + esc(v.description) + '</p><p class="sub">Source: ' + esc(v.source) + '. Version match; verify vendor applicability.</p></article>').join('');
 }
 function webBlock(w) {
   const rows = [['URL', w.url]];
@@ -221,7 +219,7 @@ function webBlock(w) {
     if (w.dns && ('spf' in w.dns)) rows.push(['Email security', 'SPF: ' + (w.dns.spf ? 'yes' : 'NO') + ', DMARC: ' + (w.dns.dmarc ? 'yes' : 'NO')]);
     if (w.exposed && w.exposed.length) rows.push(['Exposed paths', w.exposed.map((e) => e.path).join(', ')]);
   }
-  return '<div class="web"><h3>' + (w.standalone ? 'Website' : 'Web service') + ' ' + badge(w.risk_level) + ' <span class="sub">score ' + esc(w.risk_score) + '/100</span></h3>' +
+  return '<div class="web">' + (w.error ? '<p class="evidence-note">Assessment incomplete. This result does not establish whether the website is secure.</p>' : '') + '<h3>' + (w.standalone ? 'Website evidence' : 'Web service') + ' <span class="sub">' + (w.error ? 'Not assessed' : 'risk score ' + esc(w.risk_score) + '/100') + '</span></h3>' +
     kv(rows) + findingsTable(w.findings || []) + cveTable(w.vulns || []) + '</div>';
 }
 function hostCard(h, webs, open) {
@@ -236,32 +234,53 @@ function hostCard(h, webs, open) {
     ports + findingsTable(pf) + cveTable(pv) + webs.map(webBlock).join('') + '</div></details>';
 }
 function webCard(w, open) {
-  return '<details class="asset"' + (open ? ' open' : '') + '><summary>' + badge(w.risk_level) + '<b>' + esc(w.url) + '</b><span class="sub">website | score ' + esc(w.risk_score) + '/100</span></summary><div class="body">' + webBlock(w) + '</div></details>';
+  return '<details class="asset"' + (open ? ' open' : '') + '><summary>' + (w.error ? '<span class="badge s-high">INCOMPLETE</span>' : badge(w.risk_level)) + '<b>' + esc(w.url) + '</b><span class="sub">Technical evidence & findings</span></summary><div class="body">' + webBlock(w) + '</div></details>';
 }
 function renderResult(d, id, files) {
   downloadUrls.forEach(URL.revokeObjectURL); downloadUrls = [];
   const s = d.summary || {}; const cs = s.cve_severity || {}, fs = s.finding_severity || {};
   const nfind = SEV.slice(0, 4).reduce((a, k) => a + (fs[k] || 0), 0);
   const names = { docx: 'Word / WPS (.docx)', pdf: 'PDF', html: 'HTML', json: 'JSON' };
-  const dl = ['docx', 'pdf', 'html', 'json'].map((f) => (files || []).indexOf(f) >= 0
-    ? '<a class="btn" href="' + esc(reportLink(id, f)) + '" download="VulnScan_Report_' + esc(id) + '.' + f + '">Download ' + esc(names[f]) + '</a>' : '').join('');
+  const dl = ['pdf', 'docx', 'html', 'json'].map((f) => (files || []).indexOf(f) >= 0
+    ? '<a class="btn ' + (f === 'pdf' ? 'pdf-download' : '') + '" href="' + esc(reportLink(id, f)) + '" download="VulnScan_Report_' + esc(id) + '.' + f + '">Download ' + esc(names[f]) + ' ↗</a>' : '').join('');
   const hosts = (d.hosts || []).slice().sort((a, b) => b.risk_score - a.risk_score);
   const webs = d.webs || [];
   const cards = []; let first = true;
   hosts.forEach((h) => { cards.push(hostCard(h, webs.filter((w) => !w.standalone && w.host_ip === h.ip), first)); first = false; });
   webs.filter((w) => w.standalone).sort((a, b) => b.risk_score - a.risk_score).forEach((w) => { cards.push(webCard(w, first)); first = false; });
-  $('#results').innerHTML = '<section class="card"><div class="row between"><h2>Results</h2><button class="btn small" id="newbtn" type="button">New scan</button></div>' +
-    '<div class="sub">' + esc(d.targets) + ' | ' + esc(d.started) + ' | ' + esc((d.duration_s || 0).toFixed ? d.duration_s.toFixed(1) : d.duration_s) + 's' + ((d.meta || {}).interrupted ? ' | PARTIAL' : '') + '</div>' +
-    '<div class="kpis"><div class="kpi"><b>' + (s.assets || 0) + '</b><span>Assets</span></div><div class="kpi"><b>' + (s.open_ports || 0) + '</b><span>Open ports</span></div>' +
-    '<div class="kpi"><b>' + (s.cves || 0) + '</b><span>CVEs</span></div><div class="kpi"><b class="c-critical">' + (cs.critical || 0) + '</b><span>Critical CVEs</span></div>' +
-    '<div class="kpi"><b class="c-high">' + (cs.high || 0) + '</b><span>High CVEs</span></div><div class="kpi"><b>' + nfind + '</b><span>Findings</span></div></div>' +
-    '<div class="lbl">Known vulnerabilities by severity</div>' + bar(cs) + '<div class="lbl">Configuration &amp; exposure findings</div>' + bar(fs) +
-    '<div class="dl">' + (dl || '<span class="sub">No report files available.</span>') + '</div></section>' +
-    (cards.length ? cards.join('') : '<section class="card sub">No hosts or websites responded. Try "Skip ping" for hosts that block ICMP.</section>');
-  document.querySelectorAll('[data-flex]').forEach((el) => { el.style.flex = el.getAttribute('data-flex'); });
+  const incomplete = webs.some((w) => w.error) || (d.meta || {}).interrupted || (d.meta || {}).error || !cards.length;
+  const score = Math.min(100, Math.max(0, ...hosts.map((h) => Number(h.risk_score) || 0), ...webs.map((w) => Number(w.risk_score) || 0)));
+  const worst = SEV.find((level) => (fs[level] || 0) + (cs[level] || 0) > 0) || 'info';
+  const verdicts = {critical:'Prioritize immediate action.', high:'High-priority issues surfaced.', medium:'A few defenses need attention.', low:'Strengthen the small details.', info:'No major issues observed.'};
+  $('#results').innerHTML = '<section class="card ' + (incomplete ? 'risk-error' : '') + '"><div class="result-heading"><div><div class="eyebrow">YOUR ASSESSMENT</div><h2>Signals into clarity.</h2></div><button class="btn small" id="newbtn" type="button">New assessment ↗</button></div>' +
+    '<div class="result-target">' + esc(d.targets) + '<br>' + esc(d.started) + ' · ' + esc(Number(d.duration_s || 0).toFixed(1)) + 's · ' + esc(id) + '</div>' +
+    '<div class="result-overview"><div class="risk-gauge"><div><strong>' + (incomplete ? 'N/A' : score) + '</strong><span>' + (incomplete ? 'INCOMPLETE' : 'RISK / 100') + '</span></div></div><div class="verdict">' + (incomplete ? '<span class="badge s-high">INCOMPLETE ASSESSMENT</span>' : badge(worst)) + '<h3>' + (incomplete ? 'More evidence is needed.' : verdicts[worst]) + '</h3><p>' + (incomplete ? 'One or more checks could not complete. This scan cannot establish a clean security posture. Review the errors and try again.' : 'These are observations from the scanned scope. Higher scores indicate greater observed risk. Review the evidence and verify each finding before making changes.') + '</p></div></div>' +
+    '<div class="kpis"><div class="kpi"><b>' + (s.assets || 0) + '</b><span>Scope assets</span></div><div class="kpi"><b>' + nfind + '</b><span>Findings</span></div><div class="kpi"><b>' + (s.cves || 0) + '</b><span>CVE matches</span></div><div class="kpi"><b class="c-high">' + ((fs.critical || 0) + (fs.high || 0) + (cs.critical || 0) + (cs.high || 0)) + '</b><span>High + critical</span></div></div>' +
+    '<div class="eyebrow">OBSERVATIONS BY SEVERITY</div><div class="severity-grid">' + SEV.map((level) => '<div class="severity-cell ' + level + '"><b>' + ((fs[level] || 0) + (cs[level] || 0)) + '</b><span>' + level + '</span></div>').join('') + '</div>' +
+    '<div class="report-downloads"><h3>Your findings, ready for the next conversation.</h3><p>Executive summary, remediation priorities and full technical evidence.</p><div class="dl">' + (dl || '<span class="sub">No report files available.</span>') + '</div></div>' +
+    '<div class="assessment-note">A baseline assessment, not a penetration test or security certification. CVE version matches can include false positives. Hosted scans use the offline database.</div></section>' +
+    '<div class="result-toolbar" aria-label="Filter findings">' + ['all'].concat(SEV).map((level) => '<button type="button" class="filter' + (level === 'all' ? ' active' : '') + '" data-filter="' + level + '" aria-pressed="' + (level === 'all') + '">' + (level === 'all' ? 'All findings' : level.charAt(0).toUpperCase() + level.slice(1)) + '</button>').join('') + '<input id="findingsearch" type="search" aria-label="Search findings" placeholder="Search findings…"></div><p class="finding-count" id="findingcount" role="status"></p>' +
+    (cards.length ? cards.join('') : '<section class="card sub">No assets returned usable evidence. Review target reachability and scan configuration.</section>');
+  $('.risk-gauge').style.setProperty('--score', (incomplete ? 0 : score) + '%');
+  severityFilter = 'all';
+  document.querySelectorAll('[data-filter]').forEach((button) => button.addEventListener('click', () => {
+    severityFilter = button.dataset.filter;
+    document.querySelectorAll('[data-filter]').forEach((b) => { b.classList.toggle('active', b === button); b.setAttribute('aria-pressed', String(b === button)); });
+    filterFindings();
+  }));
+  $('#findingsearch').addEventListener('input', filterFindings); filterFindings();
   $('#results').classList.remove('hidden');
-  $('#newbtn').addEventListener('click', () => { $('#results').classList.add('hidden'); $('#live').classList.add('hidden'); $('#newscan').classList.remove('hidden'); setPill('Ready', ''); selected = null; markSel(); });
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  $('#newbtn').addEventListener('click', () => { $('#results').classList.add('hidden'); $('#live').classList.add('hidden'); $('#newscan').classList.remove('hidden'); setPill('Ready to scan', 'ok'); selected = null; markSel(); $('#target').focus(); });
+  $('#results').scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',block:'start'});
+}
+function filterFindings() {
+  const query = $('#findingsearch').value.toLowerCase().trim(); let total = 0, visible = 0;
+  document.querySelectorAll('.finding-card').forEach((card) => {
+    total++; const show = (severityFilter === 'all' || card.dataset.severity === severityFilter) && card.textContent.toLowerCase().includes(query);
+    card.classList.toggle('hidden', !show); if (show) visible++;
+  });
+  $('#findingcount').textContent = visible + ' of ' + total + ' observations shown';
+  if (query || severityFilter !== 'all') document.querySelectorAll('details.asset').forEach((asset) => { asset.open = true; });
 }
 async function showResult(id, files) {
   try { const d = await api('/api/scans/' + id); selected = id; renderResult(d, id, files); markSel(); }
@@ -274,10 +293,10 @@ function markSel() { document.querySelectorAll('.history .item').forEach((el) =>
 async function loadHistory() {
   try { histCache = (await api('/api/scans')).scans; } catch (e) { return; }
   const h = $('#history');
-  if (!histCache.length) { h.innerHTML = '<div class="muted">No scans yet.</div>'; return; }
+  if (!histCache.length) { h.innerHTML = '<div class="empty-history"><span aria-hidden="true">↗</span><p>Your next insight starts with a scan.</p></div>'; return; }
   h.innerHTML = histCache.map((x) => {
     const lv = x.levels || {}; const chips = SEV.slice(0, 4).filter((k) => lv[k]).map((k) => '<span class="badge s-' + k + '">' + lv[k] + ' ' + k + '</span>').join(' ');
-    return '<div class="item" data-id="' + esc(x.id) + '"><div class="t">' + esc(x.targets) + '</div><div class="d">' + esc(x.started) + ' | ' + esc(x.assets) + ' assets | ' + esc(x.cves) + ' CVEs</div><div>' + chips + '</div></div>';
+    return '<button type="button" class="item" data-id="' + esc(x.id) + '"><span class="t">' + esc(x.targets) + '</span><span class="d">' + esc(x.started) + ' · ' + esc(x.assets) + ' assets · ' + esc(x.cves) + ' CVEs</span><span>' + chips + '</span></button>';
   }).join('');
   h.querySelectorAll('.item').forEach((el) => el.addEventListener('click', () => {
     const it = histCache.find((x) => x.id === el.dataset.id);
@@ -292,20 +311,18 @@ async function loadHistory() {
     info = await api('/api/info'); $('#ver').textContent = 'v' + info.version; $('#phrasehint').textContent = info.phrase;
     cloud = info.mode === 'serverless';
     if (cloud) {
-      $('#connection').classList.remove('hidden'); $('#start').disabled = true;
+      token = ''; detectMode();
       $('#target').placeholder = 'https://your-website.com';
+      document.querySelector('label[for="target"]').textContent = 'Website URL';
       $('#targethint').textContent = 'One public HTTP(S) website on port 80 or 443. Private-network scans require local mode.';
       $('#presets').previousElementSibling.classList.add('hidden'); $('#presets').classList.add('hidden'); $('.adv').classList.add('hidden');
       $('#historynote').classList.remove('hidden'); $('#clearhistory').classList.remove('hidden');
-      $('#cloudnote').textContent = 'Website checks, offline CVE matching and report downloads. DNS email checks and network scans require local mode. History is stored in this browser.';
-      $('#checksnote').innerHTML = '<h3>Hosted website checks</h3><p>HTTPS/TLS, security headers, cookies, known exposure paths and technology versions with offline CVE matching.</p><p class="muted">One public website per scan. Only scan websites you own or have written permission to test. Network and email DNS checks require local mode.</p>';
-      try { cloudRecords = await browserStore('read'); } catch (e) { $('#historynote').textContent = 'Browser storage blocked. Download reports before closing this tab.'; }
-      if (!info.configured) $('#connectionstatus').textContent = 'Owner setup: set SCANNER_ACCESS_TOKEN (32+ characters) in Vercel Environment Variables and redeploy.';
-      else if (token) await connectCloud();
-      else $('#connectionstatus').textContent = 'Enter the access key configured by the deployment owner.';
+      $('#coveragenote').textContent = 'Public website mode · offline CVE matching. Network and email DNS checks are available in the local app.';
+      try { cloudRecords = await Promise.race([browserStore('read'), new Promise((_, reject) => setTimeout(() => reject(new Error('Storage timeout')), 3000))]); } catch (e) { $('#historynote').textContent = 'Browser storage blocked. Download reports before closing this tab.'; }
     }
+    $('#start').disabled = false; setPill('Ready to scan','ok');
   }
-  catch (e) { showErr('Cannot talk to the scanner (' + e.message + '). Start it with:  py main.py --ui  and open the printed link.'); }
+  catch (e) { showErr('Scanner connection unavailable. Refresh the page and try again. Local users: open the link printed by py main.py --ui.'); setPill('Offline',''); }
   detectMode(); loadHistory();
 })();
 })();

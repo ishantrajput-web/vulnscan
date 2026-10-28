@@ -44,11 +44,15 @@ The repository includes an explicit WSGI entrypoint at `api/index.py` and `verce
 Keep the Vercel project's **Root Directory** at the repository root. Push to `main` to deploy.
 This avoids treating the local CLI (`main.py`) as an HTTP application.
 
-Before scanning, set **SCANNER_ACCESS_TOKEN** to a random secret of at least 32 characters in
-each Vercel project's Environment Variables (Production and Preview as needed), then redeploy.
-Generate one locally with `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
-Enter that secret in the dashboard's operator access field. Never commit it or share it publicly.
-Without this environment variable the dashboard loads but scanning stays locked.
+Hosted mode is **public**: no account, access token or environment variable is required.
+Existing `SCANNER_ACCESS_TOKEN` variables are no longer read. Operators still must confirm
+ownership/written permission and type `I HAVE PERMISSION` before each public scan.
+
+The application limits each client to five scan attempts per ten minutes and two concurrent
+workers **per function instance**. Limits expire and reset on cold starts, and do not coordinate
+across instances. Configure Vercel Firewall rules for `/api/scan` for platform-wide abuse controls;
+application limits alone are not a global bot-defense guarantee. Cross-origin browser requests,
+non-JSON bodies and oversized requests are rejected. Free-tier capacity is finite.
 
 Hosted mode checks **one public HTTP(S) website on port 80 or 443** per request. The operator must
 confirm ownership/written permission and type `I HAVE PERMISSION`. Each scan has a 90-second worker
@@ -66,6 +70,12 @@ Network/port scans, Nmap, live background progress, email DNS checks and live NV
 available in **local mode**. Hosted mode uses the built-in offline CVE database. A Vercel server
 cannot scan your laptop's private LAN. Free hosting remains subject to Vercel Hobby usage limits;
 this mode does not require a paid backend or persistent disk.
+
+The dashboard includes a responsive ink/ivory/lime design, reduced-motion support, an activity
+visualization (not fabricated scan progress), searchable severity filters and downloadable reports.
+The PDF includes an executive assessment, severity distribution, remediation plan, complete findings
+and CVE descriptions, technical evidence and explicit scope/methodology. Failed checks are marked
+incomplete rather than presented as a clean bill of health.
 
 ## Reports
 `report_<id>.docx` (opens in Microsoft Word, **WPS Office**, LibreOffice, Google Docs), `.pdf`, `.html`, `.json`, plus `scan_<id>.log`

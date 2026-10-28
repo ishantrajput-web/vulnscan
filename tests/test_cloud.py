@@ -19,7 +19,7 @@ KEY = "test-only-operator-key-" + "x" * 32
 def request(path, method="GET", body=None, token=KEY, **extra):
     raw = json.dumps(body).encode() if body is not None else b""
     env = {"PATH_INFO": path, "REQUEST_METHOD": method, "HTTP_X_TOKEN": token,
-           "HTTP_HOST": "scanner.example", "CONTENT_LENGTH": str(len(raw)), "wsgi.input": io.BytesIO(raw)}
+           "HTTP_HOST": "scanner.example", "CONTENT_TYPE": "application/json", "REMOTE_ADDR": "127.0.0.1", "CONTENT_LENGTH": str(len(raw)), "wsgi.input": io.BytesIO(raw)}
     env.update(extra)
     response = {}
     def start(status, headers):
@@ -32,9 +32,12 @@ def request(path, method="GET", body=None, token=KEY, **extra):
 
 class CloudTests(unittest.TestCase):
     def setUp(self):
-        self.env = mock.patch.dict(os.environ, {"SCANNER_ACCESS_TOKEN": KEY})
+        self.env = mock.patch.dict(os.environ, {"SCANNER_ACCESS_TOKEN": ""})
         self.env.start()
         self.addCleanup(self.env.stop)
+        self.limits = mock.patch.object(cloud, "LIMITS", cloud.ScanLimits())
+        self.limits.start()
+        self.addCleanup(self.limits.stop)
 
     def test_static_routes_and_no_source_exposure(self):
         for path in ("/", "/app.js", "/app.css"):
@@ -44,13 +47,13 @@ class CloudTests(unittest.TestCase):
         for path in ("/main.py", "/.env", "/../README.md", "/api/index.py"):
             self.assertEqual(request(path)["status"], 404)
 
-    def test_configuration_and_authentication(self):
+    def test_public_mode_needs_no_secret(self):
         self.assertEqual(request("/api/info", token="")["json"]["mode"], "serverless")
-        self.assertEqual(request("/api/session", token="")["status"], 401)
-        self.assertEqual(request("/api/session")["status"], 200)
-        with mock.patch.dict(os.environ, {"SCANNER_ACCESS_TOKEN": ""}):
-            self.assertFalse(request("/api/info")["json"]["configured"])
-            self.assertEqual(request("/api/session")["status"], 503)
+        self.assertTrue(request("/api/info")["json"]["public"])
+        with mock.patch.object(cloud, "execute_scan", return_value=(200, {"id":"test"})):
+            response = request("/api/scan", "POST", {}, token="")
+        self.assertEqual(response["status"], 200)
+        self.assertEqual(cloud.LIMITS.active, 0)
 
     def test_authorization_and_request_validation(self):
         base = {"target": "https://example.com", "authorized": True, "phrase": "I HAVE PERMISSION"}
@@ -58,10 +61,39 @@ class CloudTests(unittest.TestCase):
             for change in ({"authorized": False}, {"phrase": ""}, {"nmap": True}, {"with_ports": True},
                            {"target": "file:///etc/passwd"}, {"target": "https://a:b@example.com"},
                            {"target": "https://example.com:22"}, {"target": "https://example.com https://other.com"}):
-                self.assertEqual(request("/api/scan", "POST", dict(base, **change))["status"], 400)
+                with mock.patch.object(cloud, "LIMITS", cloud.ScanLimits()):
+                    self.assertEqual(request("/api/scan", "POST", dict(base, **change))["status"], 400)
             self.assertEqual(request("/api/scan", "POST", base, HTTP_ORIGIN="https://evil.example")["status"], 403)
             self.assertEqual(request("/api/scan", "POST", ["not-an-object"])["status"], 400)
             run.assert_not_called()
+
+    def test_rate_limits_and_concurrency(self):
+        with mock.patch.object(cloud, "execute_scan", return_value=(200, {"ok":True})):
+            for _ in range(5):
+                self.assertEqual(request("/api/scan", "POST", {})["status"], 200)
+            blocked = request("/api/scan", "POST", {})
+            self.assertEqual(blocked["status"], 429)
+            self.assertEqual(blocked["headers"]["Retry-After"], "600")
+        limits = cloud.ScanLimits()
+        self.assertEqual(limits.acquire('a'), (None,0))
+        self.assertEqual(limits.acquire('b'), (None,0))
+        self.assertIsNotNone(limits.acquire('c')[0])
+        limits.release()
+        self.assertEqual(limits.acquire('c'), (None,0))
+
+    def test_cross_site_and_form_requests_blocked(self):
+        self.assertEqual(request('/api/scan', 'POST', {}, HTTP_SEC_FETCH_SITE='cross-site')['status'], 403)
+        self.assertEqual(request('/api/scan', 'POST', {}, CONTENT_TYPE='text/plain')['status'], 415)
+
+    def test_limits_release_after_failure_and_expire(self):
+        with mock.patch.object(cloud, "execute_scan", side_effect=ValueError('invalid')):
+            self.assertEqual(request('/api/scan', 'POST', {})['status'], 400)
+        self.assertEqual(cloud.LIMITS.active, 0)
+        limits = cloud.ScanLimits()
+        with mock.patch.object(cloud.time, 'monotonic', return_value=0):
+            for _ in range(5): limits.acquire('client'); limits.release()
+        with mock.patch.object(cloud.time, 'monotonic', return_value=601):
+            self.assertEqual(limits.acquire('client'), (None,0))
 
     def test_worker_timeout_is_reported(self):
         with mock.patch.object(cloud.subprocess, "run", side_effect=subprocess.TimeoutExpired("worker", 90)):

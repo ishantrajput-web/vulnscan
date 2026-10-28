@@ -1,5 +1,7 @@
 """Stateless Vercel website scanner. No background jobs or persistent local disk."""
 import datetime as dt
+from collections import deque
+import hashlib
 import http
 import json
 import logging
@@ -9,6 +11,8 @@ import secrets
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from urllib.parse import urlsplit
 
 from scanner import __version__
@@ -19,6 +23,38 @@ ROOT = Path(__file__).resolve().parent.parent
 MAX_BODY = 20000
 MAX_RESPONSE = 3 * 1024 * 1024
 log = logging.getLogger(__name__)
+
+
+class ScanLimits:
+    """Per-instance limits; platform firewall rules are needed for global limits."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.clients = {}
+        self.active = 0
+
+    def acquire(self, client):
+        now = time.monotonic()
+        key = hashlib.sha256(client.encode()).hexdigest()
+        with self.lock:
+            self.clients = {k: deque(t for t in v if now - t < 600) for k, v in self.clients.items() if v and now - v[-1] < 600}
+            visits = self.clients.get(key, deque())
+            if len(visits) >= 5:
+                return "You've reached the scan limit. Please try again in 10 minutes.", 600
+            if self.active >= 2:
+                return "The scanner is busy. Please try again in a moment.", 15
+            if key not in self.clients and len(self.clients) >= 4096:
+                return "The scanner is busy. Please try again later.", 60
+            visits.append(now)
+            self.clients[key] = visits
+            self.active += 1
+        return None, 0
+
+    def release(self):
+        with self.lock:
+            self.active = max(0, self.active - 1)
+
+
+LIMITS = ScanLimits()
 
 
 def execute_scan(body):
@@ -51,10 +87,13 @@ def app(environ, start_response):
     """Standard WSGI callable recognised by Vercel's Python runtime."""
     def send(status, payload, ctype="application/json; charset=utf-8"):
         data = payload if isinstance(payload, bytes) else json.dumps(payload).encode("utf-8")
-        start_response("%d %s" % (status, http.HTTPStatus(status).phrase), [
+        headers = [
             ("Content-Type", ctype), ("Content-Length", str(len(data))), ("Cache-Control", "no-store"),
             ("Content-Security-Policy", CSP), ("X-Content-Type-Options", "nosniff"),
-            ("Referrer-Policy", "no-referrer"), ("Cross-Origin-Resource-Policy", "same-origin")])
+            ("Referrer-Policy", "no-referrer"), ("Cross-Origin-Resource-Policy", "same-origin")]
+        if status == 429:
+            headers.append(("Retry-After", str(payload.get("retry_after", 60))))
+        start_response("%d %s" % (status, http.HTTPStatus(status).phrase), headers)
         return [data]
 
     path = environ.get("PATH_INFO", "/")
@@ -65,33 +104,39 @@ def app(environ, start_response):
             return send(200, Path(ROOT, "webui", filename).read_bytes(), ctype)
         if method == "GET" and path == "/healthz":
             return send(200, {"ok": True, "mode": "serverless"})
-        key = os.environ.get("SCANNER_ACCESS_TOKEN", "")
         if method == "GET" and path == "/api/info":
             return send(200, {"version": __version__, "mode": "serverless", "phrase": PHRASE,
-                              "configured": len(key) >= 32, "nmap": False, "pdf": True,
+                              "public": True, "nmap": False, "pdf": True,
                               "outdir": "Reports and history are saved in this browser only."})
         if not path.startswith("/api/"):
             return send(404, {"error": "Not found"})
-        if len(key) < 32:
-            return send(503, {"error": "Set SCANNER_ACCESS_TOKEN (at least 32 characters) in Vercel Environment Variables, then redeploy.",
-                              "code": "setup_required"})
-        supplied = environ.get("HTTP_X_TOKEN", "")
-        if not secrets.compare_digest(supplied.encode(), key.encode()):
-            return send(401, {"error": "Enter the operator access key for this deployment.", "code": "auth"})
-        if method == "GET" and path == "/api/session":
-            return send(200, {"ok": True})
+        # Public access was requested by the owner. execute_scan still requires
+        # authorized=True AND the exact typed PHRASE; neither gate is bypassed.
         if method == "POST" and path == "/api/scan":
             origin = environ.get("HTTP_ORIGIN")
             if origin and urlsplit(origin).netloc != environ.get("HTTP_HOST"):
                 return send(403, {"error": "Cross-origin requests are not allowed.", "code": "origin"})
+            if environ.get("HTTP_SEC_FETCH_SITE") == "cross-site":
+                return send(403, {"error": "Open the scanner directly to start a scan.", "code": "origin"})
+            if environ.get("CONTENT_TYPE", "").split(";")[0].strip().lower() != "application/json":
+                return send(415, {"error": "Send a JSON request.", "code": "bad_body"})
             size = int(environ.get("CONTENT_LENGTH") or 0)
             if not 0 < size <= MAX_BODY:
                 return send(400, {"error": "Invalid request size.", "code": "bad_body"})
             body = json.loads(environ["wsgi.input"].read(size))
             if not isinstance(body, dict):
                 raise ValueError("Request body must be a JSON object.")
-            status, payload = execute_scan(body)
-            return send(status, payload)
+            client = environ.get("REMOTE_ADDR", "unknown")
+            if os.environ.get("VERCEL") == "1":
+                client = environ.get("HTTP_X_FORWARDED_FOR", client).split(",")[0].strip()
+            error, retry = LIMITS.acquire(client)
+            if error:
+                return send(429, {"error": error, "code": "rate_limit", "retry_after": retry})
+            try:
+                status, payload = execute_scan(body)
+                return send(status, payload)
+            finally:
+                LIMITS.release()
         return send(404, {"error": "Unknown endpoint.", "code": "not_found"})
     except (ValueError, UnicodeError) as exc:
         return send(400, {"error": str(exc)[:240], "code": "bad_request"})

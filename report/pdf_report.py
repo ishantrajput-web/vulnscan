@@ -1,289 +1,230 @@
-"""Professional PDF report (reportlab). Raises ImportError if reportlab is missing -> caller falls back to HTML."""
+"""Editorial PDF assessment: complete evidence, prioritized actions and explicit scope."""
 from __future__ import annotations
 
 import os
 import re
-from xml.sax.saxutils import escape as xesc
+from xml.sax.saxutils import escape
 
-from reportlab.graphics.charts.barcharts import VerticalBarChart
-from reportlab.graphics.charts.piecharts import Pie
-from reportlab.graphics.shapes import Drawing, String
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.platypus import (PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle)
+from reportlab.platypus import Flowable, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from models import ScanResult
-from report import webview
 from report.scoring import summarize
+from report import webview
 
-SEV = ["critical", "high", "medium", "low", "info"]
-COL = {"critical": colors.HexColor("#7b1fa2"), "high": colors.HexColor("#d32f2f"),
-       "medium": colors.HexColor("#f57c00"), "low": colors.HexColor("#0288d1"),
-       "info": colors.HexColor("#757575")}
-NAVY = colors.HexColor("#0d1b2a")
-_CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+SEV = ['critical', 'high', 'medium', 'low', 'info']
+INK = colors.HexColor('#141c16')
+LIME = colors.HexColor('#d0f58a')
+MUTED = colors.HexColor('#62705f')
+LINE = colors.HexColor('#dce2d7')
+PAPER = colors.HexColor('#f5f7f0')
+COL = {'critical': colors.HexColor('#8d3199'), 'high': colors.HexColor('#b33e31'),
+       'medium': colors.HexColor('#946311'), 'low': colors.HexColor('#29658d'), 'info': MUTED}
+_CTRL = re.compile(r'[\x00-\x08\x0b-\x1f\x7f-\x9f]')
 
 
-def _t(s, limit=None) -> str:
-    """Make arbitrary text safe for reportlab Paragraphs (XML-escape, latin-1, no control chars)."""
-    s = "" if s is None else str(s)
-    s = _CTRL.sub("", s).encode("latin-1", "replace").decode("latin-1")
-    if limit and len(s) > limit:
-        s = s[: limit - 3] + "..."
-    return xesc(s)
+def _t(value):
+    text = _CTRL.sub('', '' if value is None else str(value))
+    text = text.replace('\u2013', '-').replace('\u2014', '-').replace('\u2019', "'")
+    return escape(text.encode('latin-1', 'replace').decode('latin-1')).replace('\n', '<br/>')
 
 
 def _styles():
-    ss = getSampleStyleSheet()
+    base = dict(fontName='Helvetica', textColor=INK, splitLongWords=True)
     return {
-        "title": ParagraphStyle("t", parent=ss["Title"], textColor=colors.white, fontSize=26, leading=30, alignment=0),
-        "sub": ParagraphStyle("s", parent=ss["Normal"], textColor=colors.HexColor("#cfd8dc"), fontSize=11),
-        "h1": ParagraphStyle("h1", parent=ss["Heading1"], textColor=NAVY, fontSize=17, spaceBefore=6, spaceAfter=6),
-        "h2": ParagraphStyle("h2", parent=ss["Heading2"], textColor=NAVY, fontSize=13, spaceBefore=8, spaceAfter=4),
-        "h3": ParagraphStyle("h3", parent=ss["Heading3"], textColor=colors.HexColor("#37474f"), fontSize=10.5, spaceBefore=6, spaceAfter=3),
-        "body": ParagraphStyle("b", parent=ss["Normal"], fontSize=9.5, leading=13),
-        "cell": ParagraphStyle("c", parent=ss["Normal"], fontSize=8, leading=10),
-        "cellb": ParagraphStyle("cb", parent=ss["Normal"], fontSize=8, leading=10, fontName="Helvetica-Bold"),
-        "head": ParagraphStyle("hd", parent=ss["Normal"], fontSize=8, leading=10, fontName="Helvetica-Bold", textColor=colors.white),
-        "kpi": ParagraphStyle("k", parent=ss["Normal"], fontSize=9.5, leading=13, alignment=1),
-        "small": ParagraphStyle("sm", parent=ss["Normal"], fontSize=8, textColor=colors.grey, leading=10),
+        'label': ParagraphStyle('label', fontSize=8, leading=12, textColor=MUTED, fontName='Courier', spaceAfter=7),
+        'h1': ParagraphStyle('h1', fontName='Helvetica-Bold', textColor=INK, fontSize=25, leading=30, spaceAfter=17, keepWithNext=True),
+        'h2': ParagraphStyle('h2', fontName='Helvetica-Bold', textColor=INK, fontSize=15, leading=20, spaceBefore=18, spaceAfter=10, keepWithNext=True),
+        'h3': ParagraphStyle('h3', fontName='Helvetica-Bold', textColor=INK, fontSize=10, leading=15, spaceBefore=12, spaceAfter=6, keepWithNext=True),
+        'body': ParagraphStyle('body', fontSize=9, leading=14, spaceAfter=9, **base),
+        'findingtitle': ParagraphStyle('findingtitle', fontSize=9, leading=14, spaceAfter=9, keepWithNext=True, **base),
+        'small': ParagraphStyle('small', fontSize=8, leading=12, spaceAfter=7, **base),
+        'cell': ParagraphStyle('cell', fontSize=8, leading=12, **base),
+        'head': ParagraphStyle('head', fontSize=7, leading=11, fontName='Helvetica-Bold', textColor=colors.white),
+        'callout': ParagraphStyle('callout', fontSize=11, leading=17, backColor=PAPER, borderPadding=13, spaceAfter=16, **base),
     }
 
 
-def _table(rows, widths, st, header=True, extra=None):
-    data = []
-    for i, r in enumerate(rows):
-        data.append([c if not isinstance(c, str) else Paragraph(c, st["head"] if (header and i == 0) else st["cell"]) for c in r])
-    t = Table(data, colWidths=widths, repeatRows=1 if header else 0)
-    style = [("VALIGN", (0, 0), (-1, -1), "TOP"), ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cfd8dc")),
-             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f7f9")]),
-             ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-             ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3)]
+def _table(rows, widths, st, header=True):
+    data = [[Paragraph(_t(c), st['head'] if header and i == 0 else st['cell']) for c in row] for i, row in enumerate(rows)]
+    table = Table(data, colWidths=widths, repeatRows=1 if header else 0, hAlign='LEFT')
+    commands = [('VALIGN', (0, 0), (-1, -1), 'TOP'), ('LEFTPADDING', (0, 0), (-1, -1), 9),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 9), ('TOPPADDING', (0, 0), (-1, -1), 9),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 9), ('LINEBELOW', (0, 0), (-1, -1), .5, LINE)]
     if header:
-        style.append(("BACKGROUND", (0, 0), (-1, 0), NAVY))
-    if extra:
-        style.extend(extra)
-    t.setStyle(TableStyle(style))
-    return t
+        commands += [('BACKGROUND', (0, 0), (-1, 0), INK), ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, PAPER])]
+    table.setStyle(TableStyle(commands))
+    return table
 
 
-def _sev_cell(sev, st):
-    return Paragraph('<font color="%s"><b>%s</b></font>' % (COL.get(sev, colors.grey).hexval().replace("0x", "#"), _t(sev.upper())), st["cell"])
+class Cover(Flowable):
+    def __init__(self, result, summary, width, height, incomplete):
+        super().__init__()
+        self.result, self.summary, self.width, self.height, self.incomplete = result, summary, width, height, incomplete
+
+    def draw(self):
+        c, w, h, r = self.canv, self.width, self.height, self.result
+        c.setFillColor(LIME); c.setFont('Helvetica-Bold', 25); c.drawString(0, h - 32, 'vulnscan.')
+        c.setFont('Courier', 8); c.drawRightString(w, h - 25, 'SECURITY ASSESSMENT / ' + ('SAMPLE' if r.meta.get('sample') else 'REPORT'))
+        c.setStrokeColor(colors.HexColor('#3b4939')); c.line(0, h - 55, w, h - 55)
+        title = Paragraph('Exposure,<br/>understood.', ParagraphStyle('cover-title', fontName='Helvetica', fontSize=49, leading=53, textColor=colors.HexColor('#f0f0e6')))
+        title.wrap(w, 160); title.drawOn(c, 0, h - 205)
+        subtitle = Paragraph('A point-in-time view of the evidence.<br/>A clear plan for what comes next.', ParagraphStyle('cover-sub', fontName='Helvetica', fontSize=12, leading=19, textColor=colors.HexColor('#a8b6a1')))
+        subtitle.wrap(w, 60); subtitle.drawOn(c, 0, h - 267)
+        cx, cy = w - 100, h - 400
+        c.setStrokeColor(colors.HexColor('#354a2d')); c.setLineWidth(.5)
+        for radius in (28, 51, 74, 96): c.circle(cx, cy, radius, stroke=1, fill=0)
+        c.line(cx - 96, cy, cx + 96, cy); c.line(cx, cy - 96, cx, cy + 96)
+        c.setStrokeColor(LIME); c.line(cx, cy, cx + 65, cy + 60)
+        c.setFillColor(LIME); c.circle(cx + 65, cy + 60, 3, fill=1, stroke=0)
+        c.setFont('Courier', 8); c.drawString(0, h - 338, 'ASSESSMENT STATUS')
+        c.setFillColor(colors.white); c.setFont('Helvetica-Bold', 16)
+        c.drawString(0, h - 362, 'INCOMPLETE' if self.incomplete else 'EVIDENCE COLLECTED')
+        c.setFillColor(colors.HexColor('#a8b6a1')); c.setFont('Helvetica', 10)
+        c.drawString(0, h - 385, '%d scope asset(s) / %.1fs scan time' % (self.summary['assets'], r.duration_s))
+        c.setStrokeColor(colors.HexColor('#3b4939')); c.line(0, 170, w, 170)
+        metadata = [('TARGET / SCOPE', r.targets), ('SCAN IDENTIFIER', r.scan_id), ('STARTED', r.started)]
+        y = 149
+        for label, value in metadata:
+            c.setFillColor(LIME); c.setFont('Courier', 7); c.drawString(0, y, label)
+            p = Paragraph(_t(str(value)[:180]), ParagraphStyle('cover-meta', fontName='Helvetica', fontSize=9, leading=12, textColor=colors.white))
+            _, ph = p.wrap(w - 130, 55); p.drawOn(c, 125, y - ph + 7)
+            y -= max(33, ph + 13)
+        c.setFillColor(colors.HexColor('#a8b6a1')); c.setFont('Courier', 7)
+        c.drawString(0, 8, 'PRIVATE REPORT / SHARE ONLY WITH AUTHORIZED RECIPIENTS')
 
 
-def _pie(levels):
-    vals = [levels.get(s, 0) for s in SEV]
-    d = Drawing(240, 150)
-    d.add(String(0, 138, "Hosts by risk level", fontSize=10, fontName="Helvetica-Bold"))
-    if sum(vals) == 0:
-        d.add(String(10, 70, "No data", fontSize=9))
-        return d
-    p = Pie()
-    p.x, p.y, p.width, p.height = 20, 15, 105, 105
-    p.data = [v for v in vals if v > 0]
-    present = [s for s, v in zip(SEV, vals) if v > 0]
-    p.labels = ["%d" % v for v in p.data]
-    for i, s in enumerate(present):
-        p.slices[i].fillColor = COL[s]
-    d.add(p)
-    y = 110
-    for s in present:
-        d.add(String(145, y, "%s (%d)" % (s.capitalize(), levels[s]), fontSize=8))
-        y -= 13
-    return d
-
-
-def _bars(cve_sev):
-    d = Drawing(270, 150)
-    d.add(String(0, 138, "CVEs by severity", fontSize=10, fontName="Helvetica-Bold"))
-    bc = VerticalBarChart()
-    bc.x, bc.y, bc.width, bc.height = 28, 22, 220, 100
-    bc.data = [[cve_sev.get(s, 0) for s in SEV[:4]]]
-    bc.categoryAxis.categoryNames = [s.capitalize() for s in SEV[:4]]
-    bc.categoryAxis.labels.fontSize = 8
-    bc.valueAxis.labels.fontSize = 8
-    bc.valueAxis.valueMin = 0
-    top = max(bc.data[0]) if bc.data[0] else 0
-    bc.valueAxis.valueMax = max(4, top + max(1, top // 5))
-    bc.valueAxis.valueStep = max(1, int(bc.valueAxis.valueMax // 5) or 1)
-    bc.bars.strokeColor = None
-    for i, s in enumerate(SEV[:4]):
-        bc.bars[(0, i)].fillColor = COL[s]
-    d.add(bc)
-    return d
-
-
-def _footer(canvas, doc):
+def _page(canvas, doc):
     canvas.saveState()
-    canvas.setFont("Helvetica", 8)
-    canvas.setFillColor(colors.grey)
-    canvas.drawString(15 * mm, 9 * mm, "CONFIDENTIAL - Vulnerability Assessment Report")
-    canvas.drawRightString(A4[0] - 15 * mm, 9 * mm, "Page %d" % doc.page)
+    if doc.page == 1:
+        canvas.setFillColor(INK); canvas.rect(0, 0, A4[0], A4[1], fill=1, stroke=0)
+    else:
+        canvas.setStrokeColor(LINE); canvas.line(20*mm, A4[1]-16*mm, A4[0]-20*mm, A4[1]-16*mm)
+        canvas.setFont('Helvetica-Bold', 9); canvas.setFillColor(INK); canvas.drawString(20*mm, A4[1]-12*mm, 'vulnscan.')
+        canvas.setFont('Courier', 7); canvas.setFillColor(MUTED); canvas.drawRightString(A4[0]-20*mm, A4[1]-12*mm, 'SECURITY ASSESSMENT')
+        canvas.line(20*mm, 15*mm, A4[0]-20*mm, 15*mm)
+        canvas.setFont('Courier', 7); canvas.drawString(20*mm, 10*mm, 'PRIVATE / POINT-IN-TIME OBSERVATIONS')
+        canvas.drawRightString(A4[0]-20*mm, 10*mm, '%02d' % doc.page)
     canvas.restoreState()
 
 
-def _web_story(w, st, W):
-    col = COL[w.risk_level].hexval().replace("0x", "#")
-    out = [Paragraph('%s %s &nbsp; <font color="%s">[%s - %d/100]</font>' % (
-        "Website:" if w.standalone else "Web service:", _t(w.url, 90), col, _t(w.risk_level.upper()), w.risk_score),
-        st["h2"] if w.standalone else st["h3"])]
-    rows = [[Paragraph("<b>%s</b>" % _t(k), st["cell"]), _t(v, 400)] for k, v in webview.summary_rows(w)]
-    out.append(_table(rows, [W * .2, W * .8], st, header=False))
-    fl, info_n = webview.findings(w)
-    if fl:
-        out.append(Paragraph("Security findings", st["h3"]))
-        rows = [["Severity", "Finding", "Recommended remediation"]]
-        for f in fl:
-            rows.append([_sev_cell(f.severity, st), "<b>%s</b><br/>%s" % (_t(f.title, 140), _t(f.detail, 220)), _t(f.remediation, 240)])
-        out.append(_table(rows, [W * .11, W * .50, W * .39], st))
-    elif not w.error:
-        out.append(Paragraph("No security findings above informational level.", st["body"]))
-    if info_n:
-        out.append(Paragraph("%d additional informational note(s) are included in the JSON report." % info_n, st["small"]))
-    cv = webview.cve_rows(w)
-    if cv:
-        out.append(Paragraph("Known vulnerabilities (CVE)", st["h3"]))
-        rows = [["CVE", "CVSS", "Description"]]
-        for v in cv[:20]:
-            rows.append(["%s<br/>(%s)" % (_t(v.cve_id), _t(v.source)),
-                         "%s %s" % (_t(v.severity.upper()), "" if v.cvss is None else "%.1f" % v.cvss), _t(v.description, 260)])
-        out.append(_table(rows, [W * .18, W * .14, W * .68], st))
-    out.append(Spacer(1, 8))
-    return out
+def _all_findings(result):
+    rows = [(w.url, f) for w in result.webs for f in w.findings]
+    rows += [(h.ip + ':' + str(p.port), f) for h in result.hosts for p in h.ports for f in p.findings]
+    return sorted(rows, key=lambda row: SEV.index(row[1].severity) if row[1].severity in SEV else 4)
+
+
+def _finding(f, st, index):
+    col = COL.get(f.severity, MUTED).hexval().replace('0x', '#')
+    return [Paragraph('<font color="%s">%s</font> / F-%03d' % (col, _t(f.severity.upper()), index), st['h3']),
+            Paragraph('<b>' + _t(f.title) + '</b>', st['findingtitle']),
+            Paragraph(_t(f.detail) or 'No additional evidence was recorded.', st['body']),
+            Paragraph('RECOMMENDED ACTION', st['label']),
+            Paragraph(_t(f.remediation) or 'Review this observation in the context of the application.', st['body']), Spacer(1, 7)]
+
+
+def _cve(v, st):
+    return [Paragraph(_t(v.cve_id) + ' / ' + _t(v.severity.upper()) + (' / CVSS %.1f' % v.cvss if v.cvss is not None else ''), st['h3']),
+            Paragraph(_t(v.description) or 'No description recorded.', st['body']),
+            Paragraph('Source: ' + _t(v.source) + ('. Reference: ' + _t(v.url) if v.url else ''), st['small']),
+            Paragraph('Version-based match. Verify affected versions and vendor advisories, account for back-ported fixes, then patch or mitigate and re-test.', st['small'])]
 
 
 def write_pdf(result: ScanResult, path: str) -> str:
-    st = _styles()
-    s = summarize(result)
-    doc = SimpleDocTemplate(path, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm,
-                            topMargin=15 * mm, bottomMargin=16 * mm,
-                            title="Network Vulnerability Assessment", author="VulnScan")
-    W = A4[0] - 30 * mm
-    story = []
-
-    # --- cover banner
-    cover = Table([[Paragraph("Network Vulnerability<br/>Assessment Report", st["title"])],
-                   [Paragraph("Automated discovery, service fingerprinting and CVE correlation", st["sub"])]],
-                  colWidths=[W])
-    cover.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), NAVY), ("LEFTPADDING", (0, 0), (-1, -1), 14),
-                               ("TOPPADDING", (0, 0), (0, 0), 22), ("BOTTOMPADDING", (0, -1), (-1, -1), 20)]))
-    story += [cover, Spacer(1, 10)]
-    meta = [["Scan ID", _t(result.scan_id), "Started", _t(result.started)],
-            ["Targets", _t(result.targets, 90), "Duration", "%.1f s" % result.duration_s],
-            ["Tool version", _t(result.tool_version), "Status", "PARTIAL (interrupted)" if result.meta.get("interrupted") else "Complete"]]
-    story.append(_table([[Paragraph("<b>%s</b>" % a, st["cell"]) if i % 2 == 0 else a for i, a in enumerate(r)] for r in meta],
-                        [W * .15, W * .38, W * .15, W * .32], st, header=False))
-    story.append(Spacer(1, 10))
-
-    # --- executive summary
-    story.append(Paragraph("1. Executive Summary", st["h1"]))
-    worst = next((lv for lv in SEV if s["host_levels"].get(lv)), "info")
-    verdict = {"critical": "Immediate action required: critical risk was identified.",
-               "high": "High-risk exposure identified; remediate promptly.",
-               "medium": "Moderate risk identified; schedule remediation.",
-               "low": "Low risk identified; follow best-practice hardening.",
-               "info": "No significant risk identified in the scanned scope."}[worst]
-    story.append(Paragraph("<b>Overall posture:</b> %s" % _t(verdict), st["body"]))
-    story.append(Spacer(1, 6))
-    kp = [[Paragraph("<b>%d</b><br/>Assets assessed" % s["assets"], st["kpi"]),
-           Paragraph("<b>%d</b><br/>Open ports" % s["open_ports"], st["kpi"]),
-           Paragraph("<b>%d</b><br/>CVEs matched" % s["cves"], st["kpi"]),
-           Paragraph('<font color="#7b1fa2"><b>%d</b></font><br/>Critical CVEs' % s["cve_severity"]["critical"], st["kpi"]),
-           Paragraph('<font color="#d32f2f"><b>%d</b></font><br/>High CVEs' % s["cve_severity"]["high"], st["kpi"])]]
-    k = Table(kp, colWidths=[W / 5] * 5)
-    k.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#cfd8dc")),
-                           ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cfd8dc")),
-                           ("ALIGN", (0, 0), (-1, -1), "CENTER"), ("TOPPADDING", (0, 0), (-1, -1), 8),
-                           ("BOTTOMPADDING", (0, 0), (-1, -1), 8), ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f5f7f9"))]))
-    story += [k, Spacer(1, 8)]
-    ch = Table([[_pie(s["host_levels"]), _bars(s["cve_severity"])]], colWidths=[W * .45, W * .55])
-    story += [ch, Spacer(1, 6)]
-
-    # --- host overview
-    hosts = sorted(result.hosts, key=lambda h: -h.risk_score)
-    story.append(Paragraph("Host risk overview", st["h2"]))
-    rows = [["Host", "Hostname", "OS (guess)", "Open ports", "Score", "Risk"]]
-    for h in hosts:
-        rows.append([_t(h.ip), _t(h.hostname or "-", 30), _t(h.os_guess, 28), str(len(h.ports)), str(h.risk_score), _sev_cell(h.risk_level, st)])
-    for w in [w for w in result.webs if w.standalone]:
-        rows.append([_t(w.url, 40), "website", _t(w.server or w.error or "-", 28), "-", str(w.risk_score), _sev_cell(w.risk_level, st)])
-    story.append(_table(rows, [W * .18, W * .24, W * .24, W * .12, W * .09, W * .13], st))
-
-    # --- top CVEs
-    allv = [(h.ip, p.port, v) for h in hosts for p in h.ports for v in p.vulns]
-    allv += [(w.url, 0, v) for w in result.webs for v in w.vulns]
-    allv.sort(key=lambda t: -(t[2].cvss or 0))
-    if allv:
-        story.append(Paragraph("Top vulnerabilities", st["h2"]))
-        rows = [["CVE", "CVSS", "Where", "Port", "Summary"]]
-        for where, port, v in allv[:10]:
-            rows.append([_t(v.cve_id), "%s %s" % (_t(v.severity.upper()), "" if v.cvss is None else "%.1f" % v.cvss),
-                         _t("%s:%d" % (where, port) if port else where, 38), "-" if not port else str(port),
-                         _t(v.description, 150)])
-        story.append(_table(rows, [W * .14, W * .12, W * .26, W * .08, W * .40], st))
-
-    # --- per-host
-    story.append(PageBreak())
-    story.append(Paragraph("2. Detailed Findings by Host", st["h1"]))
-    attached = {}
-    for w in result.webs:
-        if not w.standalone:
-            attached.setdefault(w.host_ip, []).append(w)
-    for idx, h in enumerate(hosts):
-        head = "%s%s" % (_t(h.ip), (" (%s)" % _t(h.hostname, 40)) if h.hostname else "")
-        story.append(Paragraph('%s &nbsp; <font color="%s">[%s - %d/100]</font>' % (
-            head, COL[h.risk_level].hexval().replace("0x", "#"), _t(h.risk_level.upper()), h.risk_score), st["h2"]))
-        story.append(Paragraph("Operating system: %s %s" % (_t(h.os_guess), ("(%s)" % _t(h.os_source)) if h.os_source else ""), st["small"]))
-        if not h.ports:
-            story.append(Paragraph("No open ports found in the scanned range.", st["body"]))
-            continue
-        rows = [["Port", "Service", "Product / Version", "Banner"]]
-        for p in h.ports:
-            pv = ("%s %s" % (p.product or "", p.version or "")).strip() or "-"
-            rows.append(["%d/tcp" % p.port, _t(p.service + (" (TLS)" if p.tls else "")), _t(pv, 40),
-                         _t(p.banner.replace("\n", " "), 90)])
-        story.append(_table(rows, [W * .11, W * .17, W * .27, W * .45], st))
-        fr = [(p, f) for p in h.ports for f in p.findings if f.severity != "info"]
-        fr.sort(key=lambda t: SEV.index(t[1].severity))
-        if fr:
-            story.append(Paragraph("Exposure & configuration findings", st["h3"]))
-            rows = [["Severity", "Finding", "Recommended remediation"]]
-            for p, f in fr:
-                rows.append([_sev_cell(f.severity, st), "<b>%s</b><br/>%s" % (_t(f.title, 100), _t(f.detail, 200)), _t(f.remediation, 220)])
-            story.append(_table(rows, [W * .11, W * .50, W * .39], st))
-        vr = [(p, v) for p in h.ports for v in p.vulns]
-        vr.sort(key=lambda t: -(t[1].cvss or 0))
-        if vr:
-            story.append(Paragraph("Known vulnerabilities (CVE)%s" % (" - top 25 shown" if len(vr) > 25 else ""), st["h3"]))
-            rows = [["CVE", "CVSS", "Port", "Description"]]
-            for p, v in vr[:25]:
-                rows.append(["%s<br/>(%s)" % (_t(v.cve_id), _t(v.source)),
-                             "%s %s" % (_t(v.severity.upper()), "" if v.cvss is None else "%.1f" % v.cvss),
-                             str(p.port), _t(v.description, 260)])
-            story.append(_table(rows, [W * .17, W * .13, W * .08, W * .62], st))
-        for w in attached.get(h.ip, []):
-            story.extend(_web_story(w, st, W))
-        story.append(Spacer(1, 10))
-    for w in [w for w in result.webs if w.standalone]:
-        story.extend(_web_story(w, st, W))
-
-    # --- recommendations & method
-    story.append(PageBreak())
-    story.append(Paragraph("3. General Recommendations", st["h1"]))
-    for t in ["Patch or upgrade every service listed under Known vulnerabilities, starting with Critical and High.",
-              "Close or firewall every port that is not required; expose management services only through a VPN.",
-              "Replace cleartext protocols (Telnet, FTP, HTTP) with encrypted equivalents (SSH, SFTP, HTTPS).",
-              "Disable legacy protocols (SMBv1, TLS 1.0/1.1) and enforce strong authentication / MFA.",
-              "Re-scan after remediation to verify fixes and schedule recurring assessments."]:
-        story.append(Paragraph("&bull; " + _t(t), st["body"]))
-    story.append(Paragraph("4. Methodology & Limitations", st["h1"]))
-    story.append(Paragraph(_t("Hosts were discovered with ICMP and TCP probes. Open TCP ports were identified with a connect scan; "
-                              "services were fingerprinted via banners and, when available, Nmap. CVEs were correlated from "
-                              "detected product versions using the NIST NVD and a built-in database. The assessment is "
-                              "non-intrusive and point-in-time: findings may include false positives (for example distributions "
-                              "that back-port security fixes without changing version numbers) and may miss vulnerabilities in "
-                              "services that hide their version. Only scan systems you are authorised to test."), st["body"]))
-    doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
+    st, s = _styles(), summarize(result)
+    doc = SimpleDocTemplate(path, pagesize=A4, leftMargin=20*mm, rightMargin=20*mm, topMargin=24*mm, bottomMargin=23*mm,
+                            title='VulnScan | Security Assessment', author='VulnScan', subject='Evidence, remediation and assessment scope')
+    width = doc.width
+    incomplete = bool(result.meta.get('interrupted') or result.meta.get('error') or any(w.error for w in result.webs) or not s['assets'])
+    findings = _all_findings(result)
+    all_cves = [(w.url, v) for w in result.webs for v in w.vulns] + [(h.ip + ':' + str(p.port), v) for h in result.hosts for p in h.ports for v in p.vulns]
+    all_cves.sort(key=lambda row: -(row[1].cvss or 0))
+    worst = next((lv for lv in SEV if s['finding_severity'].get(lv) or s['cve_severity'].get(lv)), 'info')
+    risk_score = max([0] + [h.risk_score for h in result.hosts] + [w.risk_score for w in result.webs])
+    story = [Cover(result, s, width, doc.height - 14, incomplete), PageBreak()]
+    def section(number, title):
+        story.extend([Paragraph(number + ' / ASSESSMENT', st['label']), Paragraph(title, st['h1'])])
+    section('01', 'The executive view.')
+    if result.meta.get('sample'):
+        story.append(Paragraph('<b>ILLUSTRATIVE SAMPLE.</b> This report uses a synthetic fixture. No assessment of a real website is represented.', st['callout']))
+    if incomplete:
+        verdict = 'Assessment incomplete. Missing or failed checks prevent a reliable overall conclusion. An empty findings list does not mean the target is secure.'
+    else:
+        verdict = {'critical': 'Critical observations require immediate review and containment.', 'high': 'High-priority observations require prompt validation and remediation.',
+                   'medium': 'Moderate observations identify defenses to strengthen.', 'low': 'Lower-risk observations identify opportunities for hardening.',
+                   'info': 'No significant issues were observed in this scope. This is not proof that the target is secure.'}[worst]
+    story.append(Paragraph(_t(verdict), st['callout']))
+    metrics = [['OBSERVED RISK', 'SCOPE ASSETS', 'FINDINGS', 'CVE MATCHES'],
+               ['N/A' if incomplete else '%d / 100' % risk_score, str(s['assets']), str(sum(1 for _, f in findings if f.severity != 'info')), str(s['cves'])]]
+    story.extend([_table(metrics, [width/4]*4, st), Spacer(1, 17), Paragraph('Observation distribution', st['h2'])])
+    rows = [['SEVERITY', 'CONFIGURATION / EXPOSURE', 'CVE VERSION MATCHES']]
+    rows += [[lv.upper(), str(s['finding_severity'].get(lv, 0)), str(s['cve_severity'].get(lv, 0))] for lv in SEV]
+    story.append(_table(rows, [width*.24, width*.40, width*.36], st))
+    story.append(Paragraph('Higher scores indicate greater observed risk, not exploit probability. Findings and CVEs are counted separately. Informational notes are included in the technical evidence.', st['small']))
+    story.append(Paragraph('Read this report in three passes', st['h2']))
+    for text in ('Prioritize: review the action plan and validate high-impact observations first.', 'Verify: use technical evidence and vendor guidance to establish applicability.', 'Improve: apply changes, re-test the same scope and document remaining risk.'):
+        story.append(Paragraph(_t(text), st['body']))
+    story.append(PageBreak()); section('02', 'Your remediation plan.')
+    actionable = [(asset, f) for asset, f in findings if f.severity != 'info']
+    if not actionable and not all_cves:
+        story.append(Paragraph('No actionable findings were recorded.' if not incomplete else 'Resolve assessment errors before drawing a remediation conclusion.', st['body']))
+    seen = set()
+    for asset, f in actionable:
+        key = (f.title, f.remediation)
+        if key in seen: continue
+        seen.add(key)
+        story.append(Paragraph(_t(f.severity.upper()) + ' / ' + _t(f.title), st['h3']))
+        story.append(Paragraph('Where: ' + _t(asset), st['small']))
+        story.append(Paragraph(_t(f.remediation) or 'Review and validate the finding before making a change.', st['body']))
+    if all_cves:
+        story.append(Paragraph('Validate and address version-based CVE matches', st['h2']))
+        story.append(Paragraph('Confirm the installed product and exact build against vendor advisories. Prioritize higher CVSS/severity matches; apply supported updates or mitigations, then verify the finding is resolved. Matching a version does not prove exploitability.', st['body']))
+    story.append(Paragraph('Close the loop', st['h2']))
+    story.append(Paragraph('Assign an owner to each validated issue. Test changes in a safe environment, deploy the fix, repeat the assessment and retain evidence of the outcome. Risk acceptance and remediation deadlines depend on business impact and exposure.', st['body']))
+    story.append(PageBreak()); section('03', 'The technical evidence.')
+    finding_index = 0
+    for web in result.webs:
+        story.append(Paragraph(_t(web.url), st['h2']))
+        if web.error:
+            story.append(Paragraph('<b>NOT ASSESSED:</b> ' + _t(web.error), st['callout']))
+        for label, value in webview.summary_rows(web):
+            story.append(Paragraph('<b>' + _t(label) + ':</b> ' + _t(value), st['small']))
+        for f in sorted(web.findings, key=lambda x: SEV.index(x.severity) if x.severity in SEV else 4):
+            finding_index += 1; story.extend(_finding(f, st, finding_index))
+        for v in sorted(web.vulns, key=lambda x: -(x.cvss or 0)):
+            story.extend(_cve(v, st))
+        if not web.findings and not web.vulns and not web.error:
+            story.append(Paragraph('No findings recorded for the checks performed. This is not a guarantee of security.', st['body']))
+    for host in sorted(result.hosts, key=lambda h: -h.risk_score):
+        story.append(Paragraph(_t(host.ip) + (' / ' + _t(host.hostname) if host.hostname else ''), st['h2']))
+        story.append(Paragraph('OS guess: ' + _t(host.os_guess) + '. Source: ' + _t(host.os_source) + '. Open ports: ' + str(len(host.ports)), st['small']))
+        if not host.ports: story.append(Paragraph('No open ports found in the scanned range.', st['body']))
+        for port in host.ports:
+            story.append(Paragraph('%d/%s - %s' % (port.port, _t(port.protocol), _t(port.service)), st['h3']))
+            story.append(Paragraph('Product / version: ' + _t((port.product or '') + ' ' + (port.version or '')) + '. TLS: ' + str(port.tls), st['small']))
+            if port.banner: story.append(Paragraph('<b>Banner:</b> ' + _t(port.banner), st['small']))
+            for f in sorted(port.findings, key=lambda x: SEV.index(x.severity) if x.severity in SEV else 4):
+                finding_index += 1; story.extend(_finding(f, st, finding_index))
+            for v in sorted(port.vulns, key=lambda x: -(x.cvss or 0)): story.extend(_cve(v, st))
+    story.append(PageBreak()); section('04', 'Scope, method & limits.')
+    for label, value in [('Full target scope', result.targets), ('Scan identifier', result.scan_id), ('Tool version', result.tool_version), ('Started', result.started), ('Finished', result.finished), ('Duration', '%.2f seconds' % result.duration_s)]:
+        story.append(Paragraph('<b>' + _t(label) + ':</b> ' + _t(value), st['body']))
+    hosted = result.meta.get('mode') == 'serverless'
+    method = ('Hosted website mode performs read-only HTTP requests for TLS, headers, cookie flags, version disclosures and a fixed set of known exposure paths. It accepts one public HTTP(S) website on port 80 or 443. Private, loopback, reserved and metadata addresses are blocked at connection time. Email DNS, network port scans and live NVD queries are not performed. CVE correlation uses the built-in offline database.' if hosted else
+              'Local mode supports host discovery, TCP connect scans, banner fingerprinting and website checks. Nmap and live NVD enrichment depend on scan configuration and availability. Only the configured and reachable scope is represented in the evidence above.')
+    story.append(Paragraph('Methodology', st['h2'])); story.append(Paragraph(_t(method), st['body']))
+    story.append(Paragraph('Limitations and interpretation', st['h2']))
+    for text in ('This is a baseline, point-in-time assessment. It does not include authenticated application testing, exploitation, business-logic testing or a comprehensive penetration test.',
+                 'Version-based CVE correlation can produce false positives when vendors back-port fixes. Hidden versions and incomplete detection can produce false negatives. Confirm every match with vendor guidance.',
+                 'A failed, blocked, unreachable or interrupted check is not evidence of safety. The report does not certify compliance or guarantee that all vulnerabilities have been found.',
+                 'Risk scores summarize observed signals. They are not industry certifications, exploit likelihood estimates or a replacement for a qualified assessment.',
+                 'Hosted report files are generated temporarily and returned to the requesting browser. Browser history is device- and origin-specific, can be cleared or evicted, and is not a cloud backup.',
+                 'Only test systems you own or have written permission to assess. Share this report only with authorized recipients.'):
+        story.append(Paragraph(_t(text), st['body']))
+    if result.meta.get('interrupted') or result.meta.get('error'):
+        story.append(Paragraph('Execution notes: ' + _t(result.meta.get('error') or 'Scan interrupted; only partial evidence is available.'), st['callout']))
+    doc.build(story, onFirstPage=_page, onLaterPages=_page)
     return os.path.abspath(path)
