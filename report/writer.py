@@ -32,8 +32,10 @@ def write_reports(result: ScanResult, outdir: str, fmts: List[str]) -> Tuple[Dic
             elif fmt == "pdf":
                 try:
                     from report.pdf_report import write_pdf
-                except ImportError:
-                    notes.append("reportlab not installed -> PDF skipped (py -m pip install reportlab). DOCX/HTML are unaffected.")
+                except ImportError as e:
+                    why = str(e).strip().splitlines()[0][:120] if str(e).strip() else "not installed"
+                    notes.append("PDF skipped: reportlab unavailable (%s). Fix: py -m pip install -r requirements.txt. "
+                                 "DOCX/HTML/JSON are unaffected." % why)
                     if "html" not in written and "html" not in fmts:
                         from report.html_report import write_html
                         written["html"] = write_html(result, base + ".html")
