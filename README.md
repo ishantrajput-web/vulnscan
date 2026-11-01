@@ -77,6 +77,25 @@ The PDF includes an executive assessment, severity distribution, remediation pla
 and CVE descriptions, technical evidence and explicit scope/methodology. Failed checks are marked
 incomplete rather than presented as a clean bill of health.
 
+All four export formats share `report/insights.py`: plain-language conclusions, complete observations,
+why-it-matters explanations, remediation/verification steps and chart datasets. PDF and HTML include
+labelled vector charts for severity, topic distribution and website response availability; HTML also
+provides the underlying numerical tables. DOCX uses native Word table bars with numeric labels.
+JSON preserves its existing raw schema and adds an `assessment` object (version 2) with the same
+explanations, actions, glossary and chart data. Response availability is not a count of passed tests.
+
+The standalone eight-page educational project document is generated separately and is not served
+by the scanner. Its source is `scripts/build_project_report.py`; generating it requires a recorded
+successful test log and a JSON scan result. Example:
+
+```
+python scripts/build_project_report.py --scan-json output/verification/live-result.json --test-log output/verification/test-run.txt
+```
+
+It writes `output/pdf/VulnScan_Project_Report.pdf`. This print-oriented document explains the
+implemented architecture, objectives, technologies, modules, workflow, input/output, dated results
+and limitations. Generated PDFs and verification evidence remain outside version control.
+
 ## Reports
 `report_<id>.docx` (opens in Microsoft Word, **WPS Office**, LibreOffice, Google Docs), `.pdf`, `.html`, `.json`, plus `scan_<id>.log`
 in `reports/`. Compare two scans: `py main.py --compare old.json new.json`. CI gate: `--fail-on high` (exit code 4).

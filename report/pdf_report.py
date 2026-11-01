@@ -14,6 +14,7 @@ from reportlab.platypus import Flowable, PageBreak, Paragraph, SimpleDocTemplate
 from models import ScanResult
 from report.scoring import summarize
 from report import webview
+from report.insights import assessment, explain
 
 SEV = ['critical', 'high', 'medium', 'low', 'info']
 INK = colors.HexColor('#141c16')
@@ -97,6 +98,40 @@ class Cover(Flowable):
         c.drawString(0, 8, 'PRIVATE REPORT / SHARE ONLY WITH AUTHORIZED RECIPIENTS')
 
 
+class EvidenceChart(Flowable):
+    """Labelled horizontal bars; no made-up pass rates or historical trends."""
+    def __init__(self, chart, width):
+        super().__init__()
+        self.chart, self.width = chart, width
+        self.step = 34 if len(chart['series']) > 1 else 26
+        self.height = 48 + max(1,len(chart['rows'])) * self.step + 22
+
+    def draw(self):
+        c, chart, width = self.canv, self.chart, self.width
+        left, plot = 125, width-155
+        top = self.height-35
+        ceiling = max([1]+[n for row in chart['rows'] for n in row['values']])
+        palette = [colors.HexColor('#244c39'), colors.HexColor('#88ac52')]
+        c.setFont('Helvetica',7)
+        for i, label in enumerate(chart['series']):
+            x = left + i*170
+            c.setFillColor(palette[i%2]); c.rect(x,self.height-13,7,7,stroke=0,fill=1)
+            c.setFillColor(INK); c.drawString(x+11,self.height-12,label)
+        for tick in sorted(set([0,ceiling//2,ceiling])):
+            x = left+plot*tick/ceiling
+            c.setStrokeColor(LINE); c.setLineWidth(.5); c.line(x,20,x,top+7)
+            c.setFillColor(MUTED); c.drawCentredString(x,7,str(tick))
+        if not chart['rows']:
+            c.setFillColor(MUTED); c.drawString(left,top,'No observations recorded.')
+        for i,row in enumerate(chart['rows']):
+            y = top-i*self.step
+            c.setFillColor(INK); c.setFont('Helvetica',8); c.drawString(0,y-4,row['label'])
+            for j,value in enumerate(row['values']):
+                pos = y-j*13-8
+                c.setFillColor(palette[j%2]); c.rect(left,pos,plot*value/ceiling,8,fill=1,stroke=0)
+                c.setFillColor(INK); c.setFont('Helvetica',7); c.drawString(left+plot*value/ceiling+5,pos+1,str(value))
+
+
 def _page(canvas, doc):
     canvas.saveState()
     if doc.page == 1:
@@ -119,11 +154,14 @@ def _all_findings(result):
 
 def _finding(f, st, index):
     col = COL.get(f.severity, MUTED).hexval().replace('0x', '#')
+    why, verify = explain(f.title)
     return [Paragraph('<font color="%s">%s</font> / F-%03d' % (col, _t(f.severity.upper()), index), st['h3']),
             Paragraph('<b>' + _t(f.title) + '</b>', st['findingtitle']),
             Paragraph(_t(f.detail) or 'No additional evidence was recorded.', st['body']),
+            Paragraph('<b>Why it matters:</b> ' + _t(why), st['body']),
             Paragraph('RECOMMENDED ACTION', st['label']),
-            Paragraph(_t(f.remediation) or 'Review this observation in the context of the application.', st['body']), Spacer(1, 7)]
+            Paragraph(_t(f.remediation) or 'Review this observation in the context of the application.', st['body']),
+            Paragraph('<b>How to verify:</b> ' + _t(verify), st['small']), Spacer(1, 7)]
 
 
 def _cve(v, st):
@@ -135,14 +173,14 @@ def _cve(v, st):
 
 def write_pdf(result: ScanResult, path: str) -> str:
     st, s = _styles(), summarize(result)
+    a = assessment(result)
     doc = SimpleDocTemplate(path, pagesize=A4, leftMargin=20*mm, rightMargin=20*mm, topMargin=24*mm, bottomMargin=23*mm,
                             title='VulnScan | Security Assessment', author='VulnScan', subject='Evidence, remediation and assessment scope')
     width = doc.width
-    incomplete = bool(result.meta.get('interrupted') or result.meta.get('error') or any(w.error for w in result.webs) or not s['assets'])
+    incomplete = a['status'] == 'incomplete'
     findings = _all_findings(result)
     all_cves = [(w.url, v) for w in result.webs for v in w.vulns] + [(h.ip + ':' + str(p.port), v) for h in result.hosts for p in h.ports for v in p.vulns]
     all_cves.sort(key=lambda row: -(row[1].cvss or 0))
-    worst = next((lv for lv in SEV if s['finding_severity'].get(lv) or s['cve_severity'].get(lv)), 'info')
     risk_score = max([0] + [h.risk_score for h in result.hosts] + [w.risk_score for w in result.webs])
     story = [Cover(result, s, width, doc.height - 14, incomplete), PageBreak()]
     def section(number, title):
@@ -150,41 +188,39 @@ def write_pdf(result: ScanResult, path: str) -> str:
     section('01', 'The executive view.')
     if result.meta.get('sample'):
         story.append(Paragraph('<b>ILLUSTRATIVE SAMPLE.</b> This report uses a synthetic fixture. No assessment of a real website is represented.', st['callout']))
-    if incomplete:
-        verdict = 'Assessment incomplete. Missing or failed checks prevent a reliable overall conclusion. An empty findings list does not mean the target is secure.'
-    else:
-        verdict = {'critical': 'Critical observations require immediate review and containment.', 'high': 'High-priority observations require prompt validation and remediation.',
-                   'medium': 'Moderate observations identify defenses to strengthen.', 'low': 'Lower-risk observations identify opportunities for hardening.',
-                   'info': 'No significant issues were observed in this scope. This is not proof that the target is secure.'}[worst]
-    story.append(Paragraph(_t(verdict), st['callout']))
+    story.append(Paragraph(_t(a['conclusion']), st['callout']))
     metrics = [['OBSERVED RISK', 'SCOPE ASSETS', 'FINDINGS', 'CVE MATCHES'],
                ['N/A' if incomplete else '%d / 100' % risk_score, str(s['assets']), str(sum(1 for _, f in findings if f.severity != 'info')), str(s['cves'])]]
-    story.extend([_table(metrics, [width/4]*4, st), Spacer(1, 17), Paragraph('Observation distribution', st['h2'])])
-    rows = [['SEVERITY', 'CONFIGURATION / EXPOSURE', 'CVE VERSION MATCHES']]
-    rows += [[lv.upper(), str(s['finding_severity'].get(lv, 0)), str(s['cve_severity'].get(lv, 0))] for lv in SEV]
-    story.append(_table(rows, [width*.24, width*.40, width*.36], st))
+    story.extend([_table(metrics, [width/4]*4, st), Spacer(1, 17), Paragraph(a['charts'][0]['title'], st['h2'])])
+    story.append(EvidenceChart(a['charts'][0], width))
+    story.append(Paragraph(_t(a['charts'][0]['description']), st['small']))
     story.append(Paragraph('Higher scores indicate greater observed risk, not exploit probability. Findings and CVEs are counted separately. Informational notes are included in the technical evidence.', st['small']))
     story.append(Paragraph('Read this report in three passes', st['h2']))
     for text in ('Prioritize: review the action plan and validate high-impact observations first.', 'Verify: use technical evidence and vendor guidance to establish applicability.', 'Improve: apply changes, re-test the same scope and document remaining risk.'):
         story.append(Paragraph(_t(text), st['body']))
-    story.append(PageBreak()); section('02', 'Your remediation plan.')
-    actionable = [(asset, f) for asset, f in findings if f.severity != 'info']
-    if not actionable and not all_cves:
-        story.append(Paragraph('No actionable findings were recorded.' if not incomplete else 'Resolve assessment errors before drawing a remediation conclusion.', st['body']))
-    seen = set()
-    for asset, f in actionable:
-        key = (f.title, f.remediation)
-        if key in seen: continue
-        seen.add(key)
-        story.append(Paragraph(_t(f.severity.upper()) + ' / ' + _t(f.title), st['h3']))
-        story.append(Paragraph('Where: ' + _t(asset), st['small']))
-        story.append(Paragraph(_t(f.remediation) or 'Review and validate the finding before making a change.', st['body']))
-    if all_cves:
-        story.append(Paragraph('Validate and address version-based CVE matches', st['h2']))
-        story.append(Paragraph('Confirm the installed product and exact build against vendor advisories. Prioritize higher CVSS/severity matches; apply supported updates or mitigations, then verify the finding is resolved. Matching a version does not prove exploitability.', st['body']))
-    story.append(Paragraph('Close the loop', st['h2']))
-    story.append(Paragraph('Assign an owner to each validated issue. Test changes in a safe environment, deploy the fix, repeat the assessment and retain evidence of the outcome. Risk acceptance and remediation deadlines depend on business impact and exposure.', st['body']))
-    story.append(PageBreak()); section('03', 'The technical evidence.')
+    story.append(PageBreak()); section('02', 'Where should you focus?')
+    for chart in a['charts'][1:]:
+        story.append(Paragraph(_t(chart['title']), st['h2']))
+        story.append(EvidenceChart(chart, width))
+        story.append(Paragraph(_t(chart['description']), st['small']))
+    story.append(Paragraph('How to read these charts', st['h2']))
+    story.append(Paragraph('Start with high-severity observations. Use the topic chart to group related fixes. Response availability tells you whether evidence was returned, not whether security checks passed. A chart with zero observations is not a security certificate.', st['body']))
+    if a['actions'] or incomplete:
+        story.append(PageBreak()); section('03', 'Your remediation plan.')
+        actionable = [(asset, f) for asset, f in findings if f.severity != 'info']
+        if not actionable and not all_cves:
+            story.append(Paragraph('No actionable findings were recorded.' if not incomplete else 'Resolve assessment errors before drawing a remediation conclusion.', st['body']))
+        for action in a['actions']:
+            story.append(Paragraph(_t(action['severity'].upper()) + ' / ' + _t(action['priority']) + ' / ' + _t(action['title']), st['h3']))
+            story.append(Paragraph('Where: ' + _t(', '.join(action['assets'])), st['small']))
+            story.append(Paragraph(_t(action['action']), st['body']))
+            story.append(Paragraph('<b>Verify the change:</b> ' + _t(action['verify']), st['small']))
+        if all_cves:
+            story.append(Paragraph('Validate and address version-based CVE matches', st['h2']))
+            story.append(Paragraph('Confirm the installed product and exact build against vendor advisories. Prioritize higher CVSS/severity matches; apply supported updates or mitigations, then verify the finding is resolved. Matching a version does not prove exploitability.', st['body']))
+        story.append(Paragraph('Close the loop', st['h2']))
+        story.append(Paragraph('Assign an owner to each validated issue. Test changes in a safe environment, deploy the fix, repeat the assessment and retain evidence of the outcome. Risk acceptance and remediation deadlines depend on business impact and exposure.', st['body']))
+    story.append(PageBreak()); section('04' if a['actions'] or incomplete else '03', 'The technical evidence.')
     finding_index = 0
     for web in result.webs:
         story.append(Paragraph(_t(web.url), st['h2']))
@@ -209,7 +245,7 @@ def write_pdf(result: ScanResult, path: str) -> str:
             for f in sorted(port.findings, key=lambda x: SEV.index(x.severity) if x.severity in SEV else 4):
                 finding_index += 1; story.extend(_finding(f, st, finding_index))
             for v in sorted(port.vulns, key=lambda x: -(x.cvss or 0)): story.extend(_cve(v, st))
-    story.append(PageBreak()); section('04', 'Scope, method & limits.')
+    story.append(PageBreak()); section('05' if a['actions'] or incomplete else '04', 'Scope, method & limits.')
     for label, value in [('Full target scope', result.targets), ('Scan identifier', result.scan_id), ('Tool version', result.tool_version), ('Started', result.started), ('Finished', result.finished), ('Duration', '%.2f seconds' % result.duration_s)]:
         story.append(Paragraph('<b>' + _t(label) + ':</b> ' + _t(value), st['body']))
     hosted = result.meta.get('mode') == 'serverless'
@@ -217,6 +253,8 @@ def write_pdf(result: ScanResult, path: str) -> str:
               'Local mode supports host discovery, TCP connect scans, banner fingerprinting and website checks. Nmap and live NVD enrichment depend on scan configuration and availability. Only the configured and reachable scope is represented in the evidence above.')
     story.append(Paragraph('Methodology', st['h2'])); story.append(Paragraph(_t(method), st['body']))
     story.append(Paragraph('Limitations and interpretation', st['h2']))
+    for term in a['glossary']:
+        story.append(Paragraph('<b>' + _t(term['term']) + ':</b> ' + _t(term['meaning']), st['body']))
     for text in ('This is a baseline, point-in-time assessment. It does not include authenticated application testing, exploitation, business-logic testing or a comprehensive penetration test.',
                  'Version-based CVE correlation can produce false positives when vendors back-port fixes. Hidden versions and incomplete detection can produce false negatives. Confirm every match with vendor guidance.',
                  'A failed, blocked, unreachable or interrupted check is not evidence of safety. The report does not certify compliance or guarantee that all vulnerabilities have been found.',

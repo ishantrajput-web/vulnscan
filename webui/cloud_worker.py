@@ -9,6 +9,7 @@ import time
 from engine import finalize
 from models import ScanResult
 from report.scoring import summarize
+from report.insights import assessment
 from report.writer import FORMATS, write_reports
 from scanner import __version__, webcheck
 from scanner.cve import CVEResolver
@@ -31,6 +32,7 @@ def scan(target, outdir, scan_id):
     files, notes = write_reports(result, outdir, list(FORMATS))
     data = result.to_dict()
     data["summary"] = summarize(result)
+    data["assessment"] = assessment(result)
     reports = {}
     for fmt, path in files.items():
         with open(path, "rb") as stream:

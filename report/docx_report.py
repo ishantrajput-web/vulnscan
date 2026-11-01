@@ -12,6 +12,7 @@ from xml.sax.saxutils import escape
 from models import ScanResult
 from report import webview
 from report.scoring import summarize
+from report.insights import assessment
 
 NAVY = "0D1B2A"
 SEVCOL = {"critical": "7B1FA2", "high": "D32F2F", "medium": "F57C00", "low": "0288D1", "info": "757575"}
@@ -127,181 +128,66 @@ def sev_cell(sev: str) -> Cell:
     return Cell(sev.upper(), color=SEVCOL.get(sev, "757575"), bold=True)
 
 
-def stacked_bar(counts: dict, label: str) -> str:
-    """One-row table whose cell widths are proportional to the counts - a chart that works in every editor."""
-    items = [(s, counts.get(s, 0)) for s in SEV[:4] if counts.get(s, 0) > 0]
-    out = para(run(label, b=True, size=18), after=40, keep_next=True)
-    if not items:
-        return out + para(run("None found", color="2E7D32", size=18), after=120)
-    total = sum(n for _, n in items)
-    widths = [max(700, int(W * n / total)) for _, n in items]
-    scale = W / float(sum(widths))
-    widths = [int(w * scale) for w in widths]
-    widths[-1] += W - sum(widths)
-    row = [Cell("%s %d" % (s.capitalize(), n), fill=SEVCOL[s], color="FFFFFF", bold=True, align="center", size=18) for s, n in items]
-    return out + table([row], widths, header=False, zebra=False)
-
-
-# ------------------------------------------------------------------ report body
-def _kv_table(rows, label_w=2000) -> str:
-    return table([[Cell(k, bold=True, fill="ECEFF1"), Cell(_t(v, 400))] for k, v in rows], [label_w, W - label_w],
-                 header=False, zebra=False)
-
-
-def _web_block(w, level: int) -> List[str]:
-    out = [h(level, "Website: %s" % _t(w.url, 90))]
-    if w.standalone is False:
-        out[0] = h(level, "Web service: %s" % _t(w.url, 90))
-    out.append(para(run("Risk: ", size=18) + run(w.risk_level.upper(), b=True, color=SEVCOL[w.risk_level], size=18)
-                    + run("   Score %d/100" % w.risk_score, size=18), after=60))
-    out.append(_kv_table(webview.summary_rows(w)))
-    fl, info_n = webview.findings(w)
-    if fl:
-        out.append(para(run("Security findings", b=True, color="37474F", size=21), before=120, after=40, keep_next=True))
-        rows = [["Severity", "Finding", "Recommended remediation"]]
-        for f in fl:
-            rows.append([sev_cell(f.severity),
-                         Cell(raw=para(run(_t(f.title, 140), b=True, size=16), after=0) + para(run(_t(f.detail, 240), size=15, color="546E7A"), after=0)),
-                         Cell(_t(f.remediation, 260))])
-        out.append(table(rows, [1000, 5000, W - 6000]))
-    elif not w.error:
-        out.append(para(run("No security findings above informational level.", color="2E7D32", size=18)))
-    if info_n:
-        out.append(para(run("%d additional informational note(s) are included in the JSON report." % info_n, i=True, color="757575", size=16)))
-    if w.exposed:
-        out.append(para(run("Exposed paths detected: " + ", ".join(e["path"] for e in w.exposed), size=17), after=60))
-    cves = webview.cve_rows(w)
-    if cves:
-        out.append(para(run("Known vulnerabilities (CVE)", b=True, color="37474F", size=21), before=120, after=40, keep_next=True))
-        rows = [["CVE", "CVSS", "Description"]]
-        for v in cves[:20]:
-            rows.append([Cell("%s\n(%s)" % (v.cve_id, v.source)), Cell("%s %s" % (v.severity.upper(), "" if v.cvss is None else "%.1f" % v.cvss),
-                                                                   color=SEVCOL.get(v.severity), bold=True), Cell(_t(v.description, 280))])
-        out.append(table(rows, [1900, 1300, W - 3200]))
-    return out
+def _chart_rows(chart):
+    """Native Word table bars; numeric labels remain the authoritative data."""
+    out = h(2, chart['title']) + para(chart['description'])
+    maximum = max([1]+[n for row in chart['rows'] for n in row['values']])
+    plot = 4900
+    for row in chart['rows']:
+        for index, value in enumerate(row['values']):
+            filled = int(plot*value/maximum)
+            label = row['label'] + (' / ' + chart['series'][index] if len(chart['series'])>1 else '')
+            if filled == 0:
+                bar = table([[Cell(' ',fill='EDF2E6')]], [plot], header=False, zebra=False)
+            elif filled == plot:
+                bar = table([[Cell(' ',fill='244C39' if index==0 else '88AC52')]], [plot], header=False, zebra=False)
+            else:
+                bar = table([[Cell(' ',fill='244C39' if index==0 else '88AC52'),Cell(' ',fill='EDF2E6')]], [filled,plot-filled],header=False,zebra=False)
+            out += table([[Cell(label),Cell(raw=bar),Cell(str(value),bold=True)]],[W-plot-650,plot,650],header=False,zebra=False)
+    if not chart['rows']: out += para('No observations recorded.')
+    return out + para('Unit: '+chart['unit']+'. Source: this scan only.')
 
 
 def build_body(result: ScanResult) -> str:
-    s = summarize(result)
-    hosts = sorted(result.hosts, key=lambda x: -x.risk_score)
-    standalone = [w for w in result.webs if w.standalone]
-    attached = {}
-    for w in result.webs:
-        if not w.standalone:
-            attached.setdefault(w.host_ip, []).append(w)
-    B: List[str] = []
-
-    # --- cover
-    cover = para(run("Security Assessment Report", b=True, color="FFFFFF", size=52), before=360, after=60) + \
-        para(run("Network & website vulnerability assessment", color="CFD8DC", size=24), after=360)
-    B.append(table([[Cell(raw=cover, fill=NAVY)]], [W], header=False, zebra=False))
-    B.append(para("", after=120))
-    status = "PARTIAL (interrupted)" if result.meta.get("interrupted") else "Complete"
-    meta = [[Cell("Scan ID", bold=True, fill="ECEFF1"), result.scan_id, Cell("Started", bold=True, fill="ECEFF1"), result.started],
-            [Cell("Targets", bold=True, fill="ECEFF1"), _t(result.targets, 120), Cell("Duration", bold=True, fill="ECEFF1"), "%.1f s" % result.duration_s],
-            [Cell("Tool", bold=True, fill="ECEFF1"), "VulnScan v%s" % result.tool_version, Cell("Status", bold=True, fill="ECEFF1"), status]]
-    B.append(table(meta, [1500, 3600, 1500, W - 6600], header=False, zebra=False))
-
-    # --- executive summary
-    B.append(h(1, "1. Executive Summary"))
-    worst = next((lv for lv in SEV if s["host_levels"].get(lv)), "info")
-    verdict = {"critical": "Immediate action required: critical risk was identified.",
-               "high": "High-risk exposure identified; remediate promptly.",
-               "medium": "Moderate risk identified; schedule remediation.",
-               "low": "Low risk identified; follow best-practice hardening.",
-               "info": "No significant risk identified in the scanned scope."}[worst]
-    B.append(para(run("Overall posture: ", b=True) + run(verdict, color=SEVCOL[worst], b=True), after=120))
-    k = [("%d" % s["assets"], "Assets assessed"), ("%d" % s["open_ports"], "Open ports"), ("%d" % s["cves"], "CVEs matched"),
-         ("%d" % s["cve_severity"]["critical"], "Critical CVEs"), ("%d" % s["cve_severity"]["high"], "High CVEs")]
-    kw = W // 5
-    cells = [Cell(raw=para(run(n, b=True, size=40, color=NAVY), align="center", after=0) + para(run(lbl, size=16, color="546E7A"), align="center", after=0),
-                  fill="F5F7F9") for n, lbl in k]
-    B.append(table([cells], [kw] * 4 + [W - 4 * kw], header=False, zebra=False))
-    B.append(para("", after=60))
-    B.append(stacked_bar(s["cve_severity"], "Known vulnerabilities (CVE) by severity"))
-    B.append(stacked_bar(s["finding_severity"], "Configuration & exposure findings by severity"))
-
-    rows = [["Asset", "Type", "System / Server", "Open ports", "Score", "Risk"]]
-    for hst in hosts:
-        rows.append([_t(hst.ip + ((" (%s)" % hst.hostname) if hst.hostname else ""), 50), "Host", _t(hst.os_guess, 30),
-                     str(len(hst.ports)), str(hst.risk_score), sev_cell(hst.risk_level)])
-    for w in standalone:
-        rows.append([_t(w.url, 60), "Website", _t(w.server or (w.error or "-"), 30), "-", str(w.risk_score), sev_cell(w.risk_level)])
-    if len(rows) > 1:
-        B.append(h(2, "Asset risk overview"))
-        B.append(table(rows, [3300, 900, 2300, 1100, 800, W - 8400]))
-
-    allv = [(hst.ip, p.port, v) for hst in hosts for p in hst.ports for v in p.vulns]
-    allv += [(w.url, 0, v) for w in result.webs for v in w.vulns]
-    allv.sort(key=lambda t: -(t[2].cvss or 0))
-    if allv:
-        B.append(h(2, "Top vulnerabilities"))
-        rows = [["CVE", "CVSS", "Where", "Summary"]]
-        for where, port, v in allv[:10]:
-            rows.append([_t(v.cve_id), Cell("%s %s" % (v.severity.upper(), "" if v.cvss is None else "%.1f" % v.cvss), color=SEVCOL.get(v.severity), bold=True),
-                         _t("%s:%d" % (where, port) if port else where, 40), _t(v.description, 170)])
-        B.append(table(rows, [1600, 1300, 2300, W - 5200]))
-
-    # --- details
-    B.append(page_break())
-    B.append(h(1, "2. Detailed Findings"))
-    for hst in hosts:
-        B.append(h(2, "%s%s" % (hst.ip, (" (%s)" % _t(hst.hostname, 40)) if hst.hostname else "")))
-        B.append(para(run("Risk: ", size=18) + run(hst.risk_level.upper(), b=True, color=SEVCOL[hst.risk_level], size=18)
-                      + run("   Score %d/100   |   OS: %s%s" % (hst.risk_score, _t(hst.os_guess), (" (%s)" % hst.os_source) if hst.os_source else ""), size=18), after=80))
-        if not hst.ports:
-            B.append(para("No open ports found in the scanned range."))
-        else:
-            rows = [["Port", "Service", "Product / Version", "Banner"]]
-            for p in hst.ports:
-                pv = ("%s %s" % (p.product or "", p.version or "")).strip() or "-"
-                rows.append(["%d/tcp" % p.port, _t(p.service + (" (TLS)" if p.tls else "")), _t(pv, 40), _t(p.banner.replace("\n", " "), 100)])
-            B.append(table(rows, [900, 1700, 2800, W - 5400]))
-            fr = sorted([(p, f) for p in hst.ports for f in p.findings if f.severity != "info"], key=lambda t: SEV.index(t[1].severity))
-            if fr:
-                B.append(para(run("Exposure & configuration findings", b=True, color="37474F", size=21), before=120, after=40, keep_next=True))
-                rows = [["Severity", "Finding", "Recommended remediation"]]
-                for p, f in fr:
-                    rows.append([sev_cell(f.severity),
-                                 Cell(raw=para(run(_t(f.title, 140), b=True, size=16), after=0) + para(run(_t(f.detail, 220), size=15, color="546E7A"), after=0)),
-                                 Cell(_t(f.remediation, 240))])
-                B.append(table(rows, [1000, 5000, W - 6000]))
-            vr = sorted([(p, v) for p in hst.ports for v in p.vulns], key=lambda t: -(t[1].cvss or 0))
-            if vr:
-                B.append(para(run("Known vulnerabilities (CVE)%s" % (" - top 25 shown" if len(vr) > 25 else ""), b=True, color="37474F", size=21),
-                              before=120, after=40, keep_next=True))
-                rows = [["CVE", "CVSS", "Port", "Description"]]
-                for p, v in vr[:25]:
-                    rows.append([Cell("%s\n(%s)" % (v.cve_id, v.source)), Cell("%s %s" % (v.severity.upper(), "" if v.cvss is None else "%.1f" % v.cvss),
-                                                                               color=SEVCOL.get(v.severity), bold=True), str(p.port), _t(v.description, 260)])
-                B.append(table(rows, [1900, 1300, 700, W - 3900]))
-        for w in attached.get(hst.ip, []):
-            B.extend(_web_block(w, 3))
-    for w in standalone:
-        B.extend(_web_block(w, 2))
-
-    # --- recommendations + method
-    B.append(page_break())
-    B.append(h(1, "3. General Recommendations"))
-    for t in ["Patch or upgrade every product listed under known vulnerabilities, starting with Critical and High.",
-              "Close or firewall every port that is not required; expose management services only through a VPN.",
-              "Replace cleartext protocols (Telnet, FTP, HTTP) with encrypted equivalents (SSH, SFTP, HTTPS).",
-              "Enforce HTTPS with valid certificates and add the missing browser security headers.",
-              "Remove exposed sensitive files (.env, .git) and rotate any secrets that may have been reachable.",
-              "Disable legacy protocols (SMBv1, TLS 1.0/1.1) and enforce strong authentication / MFA.",
-              "Re-scan after remediation to verify fixes and schedule recurring assessments."]:
-        B.append(para(run("-  " + t), after=60))
-    B.append(h(1, "4. Methodology & Limitations"))
-    B.append(para("Hosts were discovered with ICMP and TCP probes. Open TCP ports were found with a connect scan and services were fingerprinted "
-                  "via banners (and Nmap when available). Web origins were analysed passively: TLS certificate, redirects, security headers, cookies, "
-                  "a small set of well-known exposure paths and email-security DNS records. CVEs were correlated from detected product versions "
-                  "using the NIST NVD and a built-in database. The assessment is non-intrusive and point-in-time: results may include false positives "
-                  "(for example distributions that back-port fixes without changing version numbers) and may miss issues in services that hide their "
-                  "version. No exploitation, brute-forcing or authentication attempts were made. Only assess systems you are authorised to test."))
-    return "".join(B)
+    a, s = assessment(result), summarize(result)
+    B = [table([[Cell(raw=para(run('vulnscan.',b=True,color='D0F58A',size=32)) + para(run('Security assessment, explained.',b=True,color='FFFFFF',size=40)),fill='162219')]], [W],header=False,zebra=False)]
+    if result.meta.get('sample'): B.append(para('ILLUSTRATIVE SAMPLE. Synthetic fixture; no real assessment is represented.'))
+    B += [para('Scan: '+result.scan_id),para('Scope: '+result.targets),para('Started: '+result.started),
+          h(1,'1. Understand the result'),para(a['conclusion']),
+          para('Weighted risk indicator: '+('N/A' if a['aggregate_risk_indicator'] is None else str(a['aggregate_risk_indicator'])+'/100')),
+          para('Highest individual observation severity: '+a['highest_observation_severity']),
+          para('The indicator is not an exploit probability or a percentage of security. Missing responses do not establish safety.'),
+          table([['Scope assets','Non-info observations','Informational notes','CVE matches'],[str(s['assets']),str(a['non_informational_observations']),str(a['informational_observations']),str(s['cves'])]],[W//4]*3+[W-3*(W//4)])]
+    B += [para(step) for step in a['reading_order']]
+    B += [page_break(),h(1,'2. Read the charts')]
+    B += [_chart_rows(chart) for chart in a['charts']]
+    B += [page_break(),h(1,'3. Your prioritized action plan')]
+    if not a['actions']: B.append(para('No non-informational action is recorded. Resolve any assessment errors before interpreting an empty result.'))
+    for action in a['actions']:
+        B += [h(2,action['severity'].upper()+' / '+action['title']),para('Priority: '+action['priority']),
+              para('Where: '+', '.join(action['assets'])),para('Recommended action: '+action['action']),para('Verify the change: '+action['verify'])]
+    B += [page_break(),h(1,'4. Evidence and explanations')]
+    for obs in a['observations']:
+        B += [h(2,obs['id']+' / '+obs['severity'].upper()+' / '+obs['title']),para('Asset: '+obs['asset']),para(obs['validation'])]
+        for label,value in [('Observed evidence',obs['evidence'] or 'No additional evidence recorded.'),('Why it matters',obs['why_it_matters']),('Recommended action',obs['recommended_action']),('How to verify',obs['how_to_verify']),('Source',obs['source'])]:
+            B += [para(run(label,b=True),keep_next=True),para(value)]
+        if obs['reference']: B.append(para('Reference: '+obs['reference']))
+    B += [page_break(),h(1,'5. Scope, method and interpretation')]
+    for web in result.webs:
+        B.append(h(2,web.url))
+        if web.error: B.append(para('NOT ASSESSED: '+web.error))
+        for label,value in webview.summary_rows(web): B.append(para(label+': '+str(value)))
+    for host in result.hosts:
+        B += [h(2,host.ip),para('OS guess: '+host.os_guess)]
+        for port in host.ports:
+            B += [para('%d/%s %s - %s %s'%(port.port,port.protocol,port.service,port.product or '',port.version or '')),para('Banner: '+port.banner)]
+    B += [h(2,'Understand the terms')]
+    for term in a['glossary']: B.append(para(run(term['term']+': ',b=True)+run(term['meaning'])))
+    B += [h(2,'Limitations')]+[para(item) for item in a['limitations']]
+    B += [para('Finished: '+result.finished),para('Duration: %.2fs'%result.duration_s),para('Private assessment data. Share only with authorized recipients.')]
+    return ''.join(B)
 
 
-# ------------------------------------------------------------------ package
 _STYLES = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles %s>'
            '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Arial" w:cs="Arial"/>'
            '<w:sz w:val="20"/><w:szCs w:val="20"/><w:lang w:val="en-US"/></w:rPr></w:rPrDefault>'
