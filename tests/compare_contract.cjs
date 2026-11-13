@@ -1,8 +1,3 @@
 const {compareWebsites} = require('../webui/compare.js');
-let input = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', part => { input += part; });
-process.stdin.on('end', () => {
-  const {oldScan,newScan} = JSON.parse(input);
-  process.stdout.write(JSON.stringify(compareWebsites(oldScan,newScan)));
-});
+const cases = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+process.stdout.write(JSON.stringify(cases.map(({oldScan,newScan}) => compareWebsites(oldScan,newScan))));

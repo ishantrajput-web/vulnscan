@@ -146,14 +146,17 @@ class ComparisonTests(unittest.TestCase):
         if not node:
             self.skipTest('Node is unavailable for browser contract verification')
         old = self.fixture()
+        cases = []
         for outcome in ('no_issue','failed','skipped','issue'):
             new = copy.deepcopy(old)
             new['webs'][0]['url'] = 'https://example.com/'
             new['webs'][0]['findings'] = []
             new['webs'][0]['checks'][0]['status'] = outcome
-            result = subprocess.run([node, str(Path(__file__).with_name('compare_contract.cjs'))],
-                input=json.dumps({'oldScan':old,'newScan':new}), text=True, capture_output=True, check=True, timeout=10)
-            self.assertEqual(json.loads(result.stdout), compare_websites(old,new))
+            cases.append({'oldScan':old,'newScan':new})
+        # One startup, including cold Windows runners; keep all contract cases.
+        result = subprocess.run([node, str(Path(__file__).with_name('compare_contract.cjs'))],
+            input=json.dumps(cases), text=True, capture_output=True, check=True, timeout=60)
+        self.assertEqual(json.loads(result.stdout), [compare_websites(c['oldScan'],c['newScan']) for c in cases])
 
     def test_before_after_lab_known_fixes(self):
         from demo.lab import verify
