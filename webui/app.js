@@ -134,7 +134,7 @@ async function startCloudScan() {
   $('#live').classList.remove('hidden'); $('#cancel').classList.add('hidden'); $('#term').textContent = '';
   $('#livetitle').textContent = 'Collecting evidence'; $('#phasename').textContent = 'Checking your website. Results arrive together when the assessment completes.';
   $('#barfill').style.width = '0%'; $('#barfill').classList.add('indet'); $('#steps').textContent = ''; $('#proglabel').textContent = 'Keep this tab open · up to 90 seconds'; $('#elapsed').textContent = '0s elapsed';
-  setPill('Scanning...', 'run'); const started = Date.now();
+  setPill('Scanning...', 'run'); setTimeout(() => $('#live').scrollIntoView({behavior:'instant',block:'start'}), 80); const started = Date.now();
   const ticker = setInterval(() => { $('#elapsed').textContent = Math.floor((Date.now()-started)/1000) + 's elapsed'; }, 500);
   try {
     const record = await api('/api/scan', {method:'POST',body:{target:target,
@@ -157,7 +157,7 @@ function beginLive(id) {
   jobId = id; logN = 0; $('#term').innerHTML = '';
   $('#livetitle').textContent = 'Scan in progress'; $('#cancel').classList.remove('hidden');
   $('#live').classList.remove('hidden'); $('#results').classList.add('hidden'); $('#newscan').classList.add('hidden');
-  setPill('Scanning...', 'run'); poll();
+  setPill('Scanning...', 'run'); setTimeout(() => $('#live').scrollIntoView({behavior:'instant',block:'start'}), 80); poll();
 }
 function addLogs(logs) {
   const term = $('#term'); const stick = term.scrollTop + term.clientHeight >= term.scrollHeight - 30;
@@ -313,6 +313,7 @@ function renderResult(d, id, files) {
   $('#findingsearch').addEventListener('input', filterFindings); filterFindings();
   $('#live').classList.add('hidden');
   $('#results').classList.remove('hidden');
+  revealResults();
   $('#newbtn').addEventListener('click', () => { $('#results').classList.add('hidden'); $('#live').classList.add('hidden'); $('#newscan').classList.remove('hidden'); $('#comparison').classList.add('hidden'); setPill('Ready to scan', 'ok'); selected = null; markSel(); $('#target').focus(); });
   $('#results').scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',block:'start'});
 }
@@ -377,3 +378,21 @@ async function loadHistory() {
 })();
 })();
 
+
+// Native compositor animations keep scans responsive without an animation dependency.
+function revealResults() {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  document.querySelectorAll('#results > .card, #results .scan-coverage, #results .kpi, #results .severity-cell, #results > .asset').forEach((el, i) => {
+    el.animate([{opacity:0,transform:'translateY(12px)'},{opacity:1,transform:'translateY(0)'}],
+      {duration:550,delay:Math.min(i * 35,350),easing:'cubic-bezier(.16,1,.3,1)',fill:'backwards'});
+  });
+}
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('.btn.primary');
+  if (!button || button.disabled || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const rect = button.getBoundingClientRect(), ripple = document.createElement('span');
+  ripple.className = 'btn-ripple'; ripple.setAttribute('aria-hidden','true');
+  ripple.style.left = (event.detail ? event.clientX - rect.left : rect.width/2) + 'px';
+  ripple.style.top = (event.detail ? event.clientY - rect.top : rect.height/2) + 'px';
+  button.appendChild(ripple); ripple.addEventListener('animationend', () => ripple.remove(), {once:true});
+});
