@@ -30,7 +30,7 @@ Optional PDF support: `py -m pip install reportlab` (DOCX and HTML need nothing)
 | Network / IP | live hosts (ping + TCP), open ports, banners (plain + TLS), service/version, OS guess, known CVEs (NIST NVD + offline DB), risky exposure (Telnet, RDP, SMB, Redis, Docker API...) |
 | Website / URL | TLS certificate (trust, expiry, legacy TLS), HTTP->HTTPS redirect, security headers (HSTS, CSP, X-Frame-Options...), cookie flags, CORS, exposed files (`/.env`, `/.git`, phpinfo...), version disclosure, technology CVEs (WordPress, PHP, nginx, Apache...), SPF/DMARC |
 
-Everything is **passive**: no exploitation, brute force, logins or fuzzing. Secrets found in exposed files are never stored in reports.
+Checks use **active, non-exploitative probes** (TCP connections, TLS handshakes and fixed-path HTTP GETs): no exploitation, brute force, logins or fuzzing. Secrets found in exposed files are never stored in reports.
 Redirects to other hosts are not followed. For deep application testing use OWASP ZAP / Burp on systems you are authorised to test.
 
 ## Dashboard
@@ -71,7 +71,7 @@ available in **local mode**. Hosted mode uses the built-in offline CVE database.
 cannot scan your laptop's private LAN. Free hosting remains subject to Vercel Hobby usage limits;
 this mode does not require a paid backend or persistent disk.
 
-The dashboard includes a responsive ink/ivory/lime design, reduced-motion support, an activity
+The dashboard includes a responsive midnight/cobalt/ice design, reduced-motion support, an activity
 visualization (not fabricated scan progress), searchable severity filters and downloadable reports.
 The PDF includes an executive assessment, severity distribution, remediation plan, complete findings
 and CVE descriptions, technical evidence and explicit scope/methodology. Failed checks are marked
@@ -96,9 +96,28 @@ It writes `output/pdf/VulnScan_Project_Report.pdf`. This print-oriented document
 implemented architecture, objectives, technologies, modules, workflow, input/output, dated results
 and limitations. Generated PDFs and verification evidence remain outside version control.
 
+## Evidence and verified changes
+
+Website results include a timestamped check ledger: **Issue / note**, **No issue observed**, **Could not verify**, or **Skipped**. A failed check makes the assessment incomplete, even when other checks return findings. Exposure bodies and cookie values are not retained in website evidence. Header presence does not establish policy strength.
+
+Findings include stable check IDs and expandable evidence. Service results distinguish port-based guesses, self-reported banner identification and optional Nmap enrichment. CVEs are potential version matches; metadata discloses offline rule coverage, sources and the result cap.
+
+Use **Compare assessments** in the dashboard to review two website snapshots. A vanished finding is verified resolved only if the matching check succeeded; missing/failed checks and disappeared CVE matches remain unverified. Hosted history is compared entirely in the browser.
+
+Try the reproducible dummy-data demonstration:
+
+```sh
+python -m demo.lab --verify
+# Or serve a live loopback lab for the dashboard:
+python -m demo.lab --mode weak --port 8899
+# Stop the lab, restart with --mode hardened on the same port, then rescan.
+```
+
+The automated demo verifies eight resolved observations while retaining the HTTP transport finding. See [engineering decisions, evidence semantics and lab instructions](docs/ENGINEERING.md).
+
 ## Reports
 `report_<id>.docx` (opens in Microsoft Word, **WPS Office**, LibreOffice, Google Docs), `.pdf`, `.html`, `.json`, plus `scan_<id>.log`
-in `reports/`. Compare two scans: `py main.py --compare old.json new.json`. CI gate: `--fail-on high` (exit code 4).
+in `reports/`. Compare two scans (network changes and website observations): `py main.py --compare old.json new.json`. CI gate: `--fail-on high` (exit code 4).
 
 ## More options
 ```
@@ -124,7 +143,7 @@ falls back to cache + built-in DB - Ctrl+C / Cancel saves partial results - host
 
 ## Limitations
 CVE matching is version-based (back-ported distro patches can cause false positives; hidden versions can't be matched).
-Web analysis is a passive baseline, not a replacement for a full web-app penetration test.
+Web analysis is a non-exploitative baseline, not a replacement for a full web-app penetration test.
 
 ## License
 MIT - see `LICENSE`. Use responsibly.

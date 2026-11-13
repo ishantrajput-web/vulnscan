@@ -138,11 +138,11 @@ def _chart_rows(chart):
             filled = int(plot*value/maximum)
             label = row['label'] + (' / ' + chart['series'][index] if len(chart['series'])>1 else '')
             if filled == 0:
-                bar = table([[Cell(' ',fill='EDF2E6')]], [plot], header=False, zebra=False)
+                bar = table([[Cell(' ',fill='EDF2F8')]], [plot], header=False, zebra=False)
             elif filled == plot:
-                bar = table([[Cell(' ',fill='244C39' if index==0 else '88AC52')]], [plot], header=False, zebra=False)
+                bar = table([[Cell(' ',fill='234D85' if index==0 else '8BB0E4')]], [plot], header=False, zebra=False)
             else:
-                bar = table([[Cell(' ',fill='244C39' if index==0 else '88AC52'),Cell(' ',fill='EDF2E6')]], [filled,plot-filled],header=False,zebra=False)
+                bar = table([[Cell(' ',fill='234D85' if index==0 else '8BB0E4'),Cell(' ',fill='EDF2F8')]], [filled,plot-filled],header=False,zebra=False)
             out += table([[Cell(label),Cell(raw=bar),Cell(str(value),bold=True)]],[W-plot-650,plot,650],header=False,zebra=False)
     if not chart['rows']: out += para('No observations recorded.')
     return out + para('Unit: '+chart['unit']+'. Source: this scan only.')
@@ -150,7 +150,7 @@ def _chart_rows(chart):
 
 def build_body(result: ScanResult) -> str:
     a, s = assessment(result), summarize(result)
-    B = [table([[Cell(raw=para(run('vulnscan.',b=True,color='D0F58A',size=32)) + para(run('Security assessment, explained.',b=True,color='FFFFFF',size=40)),fill='162219')]], [W],header=False,zebra=False)]
+    B = [table([[Cell(raw=para(run('vulnscan.',b=True,color='9DC1FB',size=32)) + para(run('Security assessment, explained.',b=True,color='FFFFFF',size=40)),fill='101C30')]], [W],header=False,zebra=False)]
     if result.meta.get('sample'): B.append(para('ILLUSTRATIVE SAMPLE. Synthetic fixture; no real assessment is represented.'))
     B += [para('Scan: '+result.scan_id),para('Scope: '+result.targets),para('Started: '+result.started),
           h(1,'1. Understand the result'),para(a['conclusion']),
@@ -180,7 +180,10 @@ def build_body(result: ScanResult) -> str:
     for host in result.hosts:
         B += [h(2,host.ip),para('OS guess: '+host.os_guess)]
         for port in host.ports:
-            B += [para('%d/%s %s - %s %s'%(port.port,port.protocol,port.service,port.product or '',port.version or '')),para('Banner: '+port.banner)]
+            B += [para('%d/%s %s - %s %s'%(port.port,port.protocol,port.service,port.product or '',port.version or '')),para('Identification: '+port.identification_source),para('Banner: '+port.banner)]
+    coverage = a['cve_coverage']
+    if coverage:
+        B.append(para('CVE coverage: %s offline rules; up to %s matches per service. %s.' % (coverage['offline_rule_count'],coverage['max_matches_per_service'],coverage['matching'])))
     B += [h(2,'Understand the terms')]
     for term in a['glossary']: B.append(para(run(term['term']+': ',b=True)+run(term['meaning'])))
     B += [h(2,'Limitations')]+[para(item) for item in a['limitations']]

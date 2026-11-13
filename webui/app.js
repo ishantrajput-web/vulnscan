@@ -41,7 +41,7 @@ function browserStore(action, record) {
 
 function cloudHistory() {
   return cloudRecords.map((r) => ({id:r.id,targets:r.result.targets,started:r.result.started,
-    assets:r.result.summary.assets,cves:r.result.summary.cves,levels:r.result.summary.host_levels,files:r.files}));
+    assessment_status:(r.result.assessment || {}).status,assets:r.result.summary.assets,cves:r.result.summary.cves,levels:r.result.summary.host_levels,files:r.files}));
 }
 
 function reportLink(id, fmt) {
@@ -131,7 +131,7 @@ async function startCloudScan() {
   showErr(''); cloudBusy = true; $('#start').disabled = true;
   $('#results').classList.add('hidden');
   $('#live').classList.remove('hidden'); $('#cancel').classList.add('hidden'); $('#term').textContent = '';
-  $('#livetitle').textContent = 'Reading the signals'; $('#phasename').textContent = 'Checking your website. Results arrive together when the assessment completes.';
+  $('#livetitle').textContent = 'Collecting evidence'; $('#phasename').textContent = 'Checking your website. Results arrive together when the assessment completes.';
   $('#barfill').style.width = '0%'; $('#barfill').classList.add('indet'); $('#steps').textContent = ''; $('#proglabel').textContent = 'Keep this tab open · up to 90 seconds'; $('#elapsed').textContent = '0s elapsed';
   setPill('Scanning...', 'run'); const started = Date.now();
   const ticker = setInterval(() => { $('#elapsed').textContent = Math.floor((Date.now()-started)/1000) + 's elapsed'; }, 500);
@@ -144,8 +144,8 @@ async function startCloudScan() {
     catch (e) { storageWarning = 'Browser storage unavailable. Download reports now; this scan will be lost on reload.'; }
     selected = record.id; renderResult(record.result, record.id, record.files); await loadHistory();
     $('#newscan').classList.add('hidden'); $('#phasename').textContent = 'Assessment finished. Review the evidence below.'; $('#proglabel').textContent = 'Reports ready to download';
-    const webError = (record.result.webs || []).some((w) => w.error);
-    setPill(webError ? 'Website did not respond' : 'Done', webError ? '' : 'ok');
+    const webError = (record.result.webs || []).some((w) => w.error || (w.checks || []).some(c => c.status === 'failed'));
+    setPill(webError ? 'Incomplete assessment' : 'Done', webError ? '' : 'ok');
     $('#term').textContent = [storageWarning].concat(record.notes || [], (record.result.webs || []).map((w) => w.error || '')).filter(Boolean).join('\n') || 'Reports ready. History is stored only in this browser.';
   } catch (e) { showErr(e.message); $('#live').classList.add('hidden'); setPill('Try again', ''); }
   finally { clearInterval(ticker); cloudBusy = false; $('#start').disabled = false; $('#barfill').classList.remove('indet'); $('#barfill').style.width = '100%'; $('#elapsed').textContent = ((Date.now()-started)/1000).toFixed(1) + 's elapsed'; }
@@ -188,6 +188,39 @@ async function poll() {
   loadHistory();
 }
 
+function checkLedger(w) {
+  const checks = w.checks || [];
+  if (!checks.length) return '<p class="sub">This older assessment has no per-check coverage records.</p>';
+  const labels = {issue:'Issue / note',no_issue:'No issue observed',failed:'Could not verify',skipped:'Skipped'};
+  const counts = Object.fromEntries(Object.keys(labels).map(k => [k, checks.filter(c => c.status === k).length]));
+  return '<div class="coverage-summary">' + Object.keys(labels).map(k => '<div><b>' + counts[k] + '</b><span>' + labels[k] + '</span></div>').join('') +
+    '<details class="check-ledger"><summary>Inspect all ' + checks.length + ' checks</summary><p class="sub">No issue observed applies only to the sampled response and this check’s scope. It is not a security guarantee.</p>' + checks.map(c =>
+      '<div class="check-row"><span class="check-state ' + esc(c.status) + '">' + esc(labels[c.status] || c.status) + '</span><div><span class="check-label">' + esc(c.label) + '</span><small>' + esc(c.observed_at || '') + '</small>' +
+      (c.error ? '<small>' + esc(c.error) + '</small>' : '') + '<details class="evidence-detail"><summary>Evidence</summary><pre>' + esc(JSON.stringify(c.evidence || {},null,2)) + '</pre></details></div></div>').join('') + '</details>';
+}
+
+$('#comparebtn').addEventListener('click', async () => {
+  const oldId = $('#compareold').value, newId = $('#comparenew').value;
+  if (!oldId || !newId || oldId === newId) { $('#comparestatus').textContent = 'Choose two different assessments of the same website.'; return; }
+  $('#comparebtn').disabled = true; $('#comparestatus').textContent = 'Comparing recorded evidence…';
+  try {
+    const [oldScan,newScan] = await Promise.all([api('/api/scans/' + oldId),api('/api/scans/' + newId)]);
+    const rows = window.VulnScanCompare(oldScan,newScan);
+    const labels = {new:'New',resolved:'Verified resolved',still_present:'Still present',not_verified:'Not verified'};
+    let html = '<section class="card"><div class="eyebrow">ASSESSMENT COMPARISON</div><h2>What changed?</h2><p class="sub">Baseline: ' + esc(oldScan.started) + '<br>Follow-up: ' + esc(newScan.started) + '</p><p class="assessment-note">A finding is resolved only when its matching check completes without observing the issue. Disappearing CVE matches require vendor verification.</p>';
+    if (!Object.keys(rows).length) html += '<p>These assessments contain no website results. Use the CLI to compare network scans.</p>';
+    Object.entries(rows).forEach(([url, states]) => {
+      html += '<h3 class="result-target">' + esc(url) + '</h3><div class="comparison-grid">' + Object.keys(labels).map(k => '<div><b>' + states[k].length + '</b>' + labels[k] + '</div>').join('') + '</div>';
+      Object.keys(labels).forEach(k => states[k].forEach(item => { html += '<div class="comparison-list">' + badge(item.severity) + ' ' + esc(item.title) + '<span>' + labels[k] + (item.check_id ? ' · ' + esc(item.check_id) : '') + '</span></div>'; }));
+      if (states.response === 'not_verified') html += '<p class="evidence-note">Follow-up response unavailable or interrupted. Absence of findings does not establish a fix.</p>';
+    });
+    $('#comparison').innerHTML = html + '</section>'; $('#comparison').classList.remove('hidden');
+    $('#comparestatus').textContent = 'Comparison ready. Your scan history stays in its existing storage.';
+    $('#comparison').scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
+  } catch (error) { $('#comparestatus').textContent = error.message; }
+  finally { $('#comparebtn').disabled = false; }
+});
+
 // ---------- results
 function bar(counts) {
   const items = SEV.slice(0, 4).filter((k) => (counts[k] || 0) > 0);
@@ -199,13 +232,14 @@ function findingsTable(list) {
   const f = list.slice().sort((a, b) => SEV.indexOf(a.severity) - SEV.indexOf(b.severity));
   if (!f.length) return '';
   return f.map((x) => '<article class="finding-card" data-severity="' + esc(x.severity) + '"><div class="finding-top">' + badge(x.severity) + '<h4>' + esc(x.title) + '</h4></div>' +
-    '<p>' + esc(x.detail) + '</p>' + (x.remediation ? '<div class="finding-fix"><div class="eyebrow">RECOMMENDED ACTION</div><p>' + esc(x.remediation) + '</p></div>' : '') + '</article>').join('');
+    '<p>' + esc(x.detail) + '</p>' + (x.check_id ? '<details class="evidence-detail"><summary>Observed evidence · ' + esc(x.check_id) + '</summary><pre>' + esc(x.observed_at || '') + '\n' + esc(JSON.stringify(x.evidence || {},null,2)) + '</pre></details>' : '') + (x.remediation ? '<div class="finding-fix"><div class="eyebrow">RECOMMENDED ACTION</div><p>' + esc(x.remediation) + '</p></div>' : '') + '</article>').join('');
 }
 function cveTable(list) {
   if (!list.length) return '';
   const l = list.slice().sort((a, b) => (b.cvss || 0) - (a.cvss || 0));
   return l.map((v) => '<article class="finding-card" data-severity="' + esc(v.severity) + '"><div class="finding-top">' + badge(v.severity) + '<h4>' + esc(v.cve_id) + (v.cvss == null ? '' : ' · CVSS ' + esc(v.cvss)) + '</h4></div><p>' + esc(v.description) + '</p><p class="sub">Source: ' + esc(v.source) + '. Version match; verify vendor applicability.</p></article>').join('');
 }
+function webIncomplete(w) { return !!(w.error || w.status == null || (w.checks || []).some(c => c.status === 'failed')); }
 function webBlock(w) {
   const rows = [['URL', w.url]];
   if (w.error) rows.push(['Result', 'Could not analyse: ' + w.error]);
@@ -216,10 +250,10 @@ function webBlock(w) {
     if (w.techs && w.techs.length) rows.push(['Technologies', w.techs.map((t) => (t.product + ' ' + (t.version || '')).trim()).join(', ')]);
     const t = w.tls || {};
     if (t.version) rows.push(['TLS', t.version + ' | trusted: ' + (t.valid ? 'yes' : 'NO' + (t.error ? ' (' + t.error + ')' : '')) + (t.not_after ? ' | expires ' + t.not_after + ' (' + t.days_left + ' days)' : '')]);
-    if (w.dns && ('spf' in w.dns)) rows.push(['Email security', 'SPF: ' + (w.dns.spf ? 'yes' : 'NO') + ', DMARC: ' + (w.dns.dmarc ? 'yes' : 'NO')]);
+    if (w.dns && ('spf' in w.dns)) rows.push(['Email security', 'SPF: ' + (w.dns.spf_error ? 'UNKNOWN' : w.dns.spf ? 'present' : 'not found') + ', DMARC: ' + (w.dns.dmarc_error ? 'UNKNOWN' : w.dns.dmarc ? 'present' : 'not found')]);
     if (w.exposed && w.exposed.length) rows.push(['Exposed paths', w.exposed.map((e) => e.path).join(', ')]);
   }
-  return '<div class="web">' + (w.error ? '<p class="evidence-note">Assessment incomplete. This result does not establish whether the website is secure.</p>' : '') + '<h3>' + (w.standalone ? 'Website evidence' : 'Web service') + ' <span class="sub">' + (w.error ? 'Not assessed' : 'risk score ' + esc(w.risk_score) + '/100') + '</span></h3>' +
+  return '<div class="web">' + checkLedger(w) + (webIncomplete(w) ? '<p class="evidence-note">Assessment incomplete. This result does not establish whether the website is secure.</p>' : '') + '<h3>' + (w.standalone ? 'Website evidence' : 'Web service') + ' <span class="sub">' + (webIncomplete(w) ? 'Not fully assessed' : 'risk score ' + esc(w.risk_score) + '/100') + '</span></h3>' +
     kv(rows) + findingsTable(w.findings || []) + cveTable(w.vulns || []) + '</div>';
 }
 function hostCard(h, webs, open) {
@@ -227,19 +261,21 @@ function hostCard(h, webs, open) {
   const pv = []; (h.ports || []).forEach((p) => (p.vulns || []).forEach((v) => pv.push(v)));
   let ports = '<div class="sub">No open ports found in the scanned range.</div>';
   if ((h.ports || []).length) ports = '<table><tr><th>Port</th><th>Service</th><th>Product / version</th><th>Banner</th></tr>' + h.ports.map((p) =>
-    '<tr><td>' + esc(p.port) + '/tcp</td><td>' + esc(p.service) + (p.tls ? ' <span class="sub">(TLS)</span>' : '') + '</td><td>' + esc(((p.product || '') + ' ' + (p.version || '')).trim() || '-') +
+    '<tr><td>' + esc(p.port) + '/tcp</td><td>' + esc(p.service) + '<br><span class="sub">' + esc(p.identification_source || 'Identification source not recorded') + '</span>' + (p.tls ? ' <span class="sub">(TLS)</span>' : '') + '</td><td>' + esc(((p.product || '') + ' ' + (p.version || '')).trim() || '-') +
     '</td><td class="mono">' + esc((p.banner || '').replace(/\n/g, ' ').slice(0, 110)) + '</td></tr>').join('') + '</table>';
   return '<details class="asset"' + (open ? ' open' : '') + '><summary>' + badge(h.risk_level) + '<b>' + esc(h.ip) + '</b>' +
     (h.hostname ? '<span class="sub">' + esc(h.hostname) + '</span>' : '') + '<span class="sub">OS: ' + esc(h.os_guess) + '</span><span class="sub">score ' + esc(h.risk_score) + '/100 | ' + (h.ports || []).length + ' open ports</span></summary><div class="body">' +
     ports + findingsTable(pf) + cveTable(pv) + webs.map(webBlock).join('') + '</div></details>';
 }
 function webCard(w, open) {
-  return '<details class="asset"' + (open ? ' open' : '') + '><summary>' + (w.error ? '<span class="badge s-high">INCOMPLETE</span>' : badge(w.risk_level)) + '<b>' + esc(w.url) + '</b><span class="sub">Technical evidence & findings</span></summary><div class="body">' + webBlock(w) + '</div></details>';
+  return '<details class="asset"' + (open ? ' open' : '') + '><summary>' + (webIncomplete(w) ? '<span class="badge s-high">INCOMPLETE</span>' : badge(w.risk_level)) + '<b>' + esc(w.url) + '</b><span class="sub">Technical evidence & findings</span></summary><div class="body">' + webBlock(w) + '</div></details>';
 }
 function renderResult(d, id, files) {
   downloadUrls.forEach(URL.revokeObjectURL); downloadUrls = [];
   const s = d.summary || {}; const cs = s.cve_severity || {}, fs = s.finding_severity || {};
   const nfind = SEV.slice(0, 4).reduce((a, k) => a + (fs[k] || 0), 0);
+  const coverage = (d.meta || {}).cve_coverage;
+  const coverageNote = coverage ? '<p class="assessment-note">CVE coverage: ' + esc(coverage.offline_rule_count) + ' offline rules; up to ' + esc(coverage.max_matches_per_service) + ' matches per service. ' + esc(coverage.matching) + '.</p>' : '';
   const names = { docx: 'Word / WPS (.docx)', pdf: 'PDF', html: 'HTML', json: 'JSON' };
   const dl = ['pdf', 'docx', 'html', 'json'].map((f) => (files || []).indexOf(f) >= 0
     ? '<a class="btn ' + (f === 'pdf' ? 'pdf-download' : '') + '" href="' + esc(reportLink(id, f)) + '" download="VulnScan_Report_' + esc(id) + '.' + f + '">Download ' + esc(names[f]) + ' ↗</a>' : '').join('');
@@ -248,16 +284,16 @@ function renderResult(d, id, files) {
   const cards = []; let first = true;
   hosts.forEach((h) => { cards.push(hostCard(h, webs.filter((w) => !w.standalone && w.host_ip === h.ip), first)); first = false; });
   webs.filter((w) => w.standalone).sort((a, b) => b.risk_score - a.risk_score).forEach((w) => { cards.push(webCard(w, first)); first = false; });
-  const incomplete = webs.some((w) => w.error) || (d.meta || {}).interrupted || (d.meta || {}).error || !cards.length;
+  const incomplete = webs.some((w) => w.error || w.status == null || (w.checks || []).some(c => c.status === 'failed')) || (d.meta || {}).interrupted || (d.meta || {}).error || !cards.length;
   const score = Math.min(100, Math.max(0, ...hosts.map((h) => Number(h.risk_score) || 0), ...webs.map((w) => Number(w.risk_score) || 0)));
   const worst = SEV.find((level) => (fs[level] || 0) + (cs[level] || 0) > 0) || 'info';
   const verdicts = {critical:'Prioritize immediate action.', high:'High-priority issues surfaced.', medium:'A few defenses need attention.', low:'Strengthen the small details.', info:'No major issues observed.'};
-  $('#results').innerHTML = '<section class="card ' + (incomplete ? 'risk-error' : '') + '"><div class="result-heading"><div><div class="eyebrow">YOUR ASSESSMENT</div><h2>Signals into clarity.</h2></div><button class="btn small" id="newbtn" type="button">New assessment ↗</button></div>' +
+  $('#results').innerHTML = ((d.meta || {}).sample ? '<p class="evidence-note">ILLUSTRATIVE SAMPLE · Synthetic fixture, not a real target assessment.</p>' : '') + '<section class="card ' + (incomplete ? 'risk-error' : '') + '"><div class="result-heading"><div><div class="eyebrow">YOUR ASSESSMENT</div><h2>Your assessment.</h2></div><button class="btn small" id="newbtn" type="button">New assessment ↗</button></div>' +
     '<div class="result-target">' + esc(d.targets) + '<br>' + esc(d.started) + ' · ' + esc(Number(d.duration_s || 0).toFixed(1)) + 's · ' + esc(id) + '</div>' +
     '<div class="result-overview"><div class="risk-gauge"><div><strong>' + (incomplete ? 'N/A' : score) + '</strong><span>' + (incomplete ? 'INCOMPLETE' : 'RISK / 100') + '</span></div></div><div class="verdict">' + (incomplete ? '<span class="badge s-high">INCOMPLETE ASSESSMENT</span>' : badge(worst)) + '<h3>' + (incomplete ? 'More evidence is needed.' : verdicts[worst]) + '</h3><p>' + (incomplete ? 'One or more checks could not complete. This scan cannot establish a clean security posture. Review the errors and try again.' : 'These are observations from the scanned scope. Higher scores indicate greater observed risk. Review the evidence and verify each finding before making changes.') + '</p></div></div>' +
-    '<div class="kpis"><div class="kpi"><b>' + (s.assets || 0) + '</b><span>Scope assets</span></div><div class="kpi"><b>' + nfind + '</b><span>Findings</span></div><div class="kpi"><b>' + (s.cves || 0) + '</b><span>CVE matches</span></div><div class="kpi"><b class="c-high">' + ((fs.critical || 0) + (fs.high || 0) + (cs.critical || 0) + (cs.high || 0)) + '</b><span>High + critical</span></div></div>' +
+    coverageNote + '<div class="kpis"><div class="kpi"><b>' + (s.assets || 0) + '</b><span>Scope assets</span></div><div class="kpi"><b>' + nfind + '</b><span>Configuration findings</span></div><div class="kpi"><b>' + (s.cves || 0) + '</b><span>Potential CVE matches</span></div><div class="kpi"><b class="c-high">' + ((fs.critical || 0) + (fs.high || 0) + (cs.critical || 0) + (cs.high || 0)) + '</b><span>High + critical</span></div></div>' +
     '<div class="eyebrow">OBSERVATIONS BY SEVERITY</div><div class="severity-grid">' + SEV.map((level) => '<div class="severity-cell ' + level + '"><b>' + ((fs[level] || 0) + (cs[level] || 0)) + '</b><span>' + level + '</span></div>').join('') + '</div>' +
-    '<div class="report-downloads"><h3>Your findings, ready for the next conversation.</h3><p>Executive summary, remediation priorities and full technical evidence.</p><div class="dl">' + (dl || '<span class="sub">No report files available.</span>') + '</div></div>' +
+    '<div class="report-downloads"><h3>Keep the evidence. Share the next steps.</h3><p>Executive summary, remediation priorities and full technical evidence.</p><div class="dl">' + (dl || '<span class="sub">No report files available.</span>') + '</div></div>' +
     '<div class="assessment-note">A baseline assessment, not a penetration test or security certification. CVE version matches can include false positives. Hosted scans use the offline database.</div></section>' +
     '<div class="result-toolbar" aria-label="Filter findings">' + ['all'].concat(SEV).map((level) => '<button type="button" class="filter' + (level === 'all' ? ' active' : '') + '" data-filter="' + level + '" aria-pressed="' + (level === 'all') + '">' + (level === 'all' ? 'All findings' : level.charAt(0).toUpperCase() + level.slice(1)) + '</button>').join('') + '<input id="findingsearch" type="search" aria-label="Search findings" placeholder="Search findings…"></div><p class="finding-count" id="findingcount" role="status"></p>' +
     (cards.length ? cards.join('') : '<section class="card sub">No assets returned usable evidence. Review target reachability and scan configuration.</section>');
@@ -270,7 +306,7 @@ function renderResult(d, id, files) {
   }));
   $('#findingsearch').addEventListener('input', filterFindings); filterFindings();
   $('#results').classList.remove('hidden');
-  $('#newbtn').addEventListener('click', () => { $('#results').classList.add('hidden'); $('#live').classList.add('hidden'); $('#newscan').classList.remove('hidden'); setPill('Ready to scan', 'ok'); selected = null; markSel(); $('#target').focus(); });
+  $('#newbtn').addEventListener('click', () => { $('#results').classList.add('hidden'); $('#live').classList.add('hidden'); $('#newscan').classList.remove('hidden'); $('#comparison').classList.add('hidden'); setPill('Ready to scan', 'ok'); selected = null; markSel(); $('#target').focus(); });
   $('#results').scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',block:'start'});
 }
 function filterFindings() {
@@ -292,10 +328,17 @@ let histCache = [];
 function markSel() { document.querySelectorAll('.history .item').forEach((el) => el.classList.toggle('sel', el.dataset.id === selected)); }
 async function loadHistory() {
   try { histCache = (await api('/api/scans')).scans; } catch (e) { return; }
+  const oldValue = $('#compareold').value, newValue = selected || $('#comparenew').value;
+  const options = histCache.map(x => '<option value="' + esc(x.id) + '">' + esc(x.started + ' · ' + x.targets) + '</option>').join('') || '<option value="">No assessments yet</option>';
+  $('#compareold').innerHTML = options; $('#comparenew').innerHTML = options;
+  if (histCache.some(x => x.id === oldValue)) $('#compareold').value = oldValue;
+  else if (histCache.length > 1) $('#compareold').value = histCache[1].id;
+  if (histCache.some(x => x.id === newValue)) $('#comparenew').value = newValue;
+  $('#comparebtn').disabled = histCache.length < 2;
   const h = $('#history');
-  if (!histCache.length) { h.innerHTML = '<div class="empty-history"><span aria-hidden="true">↗</span><p>Your next insight starts with a scan.</p></div>'; return; }
+  if (!histCache.length) { h.innerHTML = '<div class="empty-history"><span aria-hidden="true">↗</span><p>Completed assessments appear here.</p></div>'; return; }
   h.innerHTML = histCache.map((x) => {
-    const lv = x.levels || {}; const chips = SEV.slice(0, 4).filter((k) => lv[k]).map((k) => '<span class="badge s-' + k + '">' + lv[k] + ' ' + k + '</span>').join(' ');
+    const lv = x.levels || {}; const chips = x.assessment_status === 'incomplete' ? '<span class="badge s-medium">INCOMPLETE</span>' : SEV.slice(0, 4).filter((k) => lv[k]).map((k) => '<span class="badge s-' + k + '">' + lv[k] + ' ' + k + '</span>').join(' ');
     return '<button type="button" class="item" data-id="' + esc(x.id) + '"><span class="t">' + esc(x.targets) + '</span><span class="d">' + esc(x.started) + ' · ' + esc(x.assets) + ' assets · ' + esc(x.cves) + ' CVEs</span><span>' + chips + '</span></button>';
   }).join('');
   h.querySelectorAll('.item').forEach((el) => el.addEventListener('click', () => {

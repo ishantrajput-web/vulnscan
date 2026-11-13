@@ -98,3 +98,11 @@ def clean_version(v: Optional[str]) -> Optional[str]:
         return m.group(1)
     m = _VER_RE.search(v)
     return m.group(0) if m else None
+
+
+def identification_source(port: int, banner: str) -> str:
+    if any(rx.search(banner or '') for rx, _, _, _ in _COMPILED):
+        return 'banner-based identification (self-reported)'
+    if port == 3306 and re.search(r'\d+\.\d+\.\d+', banner or ''):
+        return 'banner-based identification (self-reported)'
+    return 'port-based guess'

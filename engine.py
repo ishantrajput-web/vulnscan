@@ -75,6 +75,12 @@ def finalize(result: ScanResult) -> None:
             if (h.ip, p.port) in covered:      # web analysis already covers headers / cleartext HTTP
                 fl = [f for f in fl if not f.title.startswith(("Missing HTTP security headers", "Unencrypted HTTP service"))]
             p.findings = fl
+            for f in p.findings:
+                f.check_id = 'network.' + p.service
+                f.observed_at = result.started
+                f.evidence = {'ip': h.ip, 'port': p.port, 'service': p.service,
+                              'identification_source': p.identification_source,
+                              'product': p.product, 'version': p.version}
     for w in result.webs:
         scoring.score_web(w)
     attached = {}
@@ -169,6 +175,7 @@ async def run_scan(cfg: ScanConfig, result: ScanResult, ui: UI) -> None:
                 except Exception:
                     pass
             p.service, p.product, p.version = services.identify(p.port, p.banner, p.tls)
+            p.identification_source = services.identification_source(p.port, p.banner)
             done[0] += 1
             ui.progress(done[0], len(jobs), "ports")
 
@@ -198,6 +205,7 @@ async def run_scan(cfg: ScanConfig, result: ScanResult, ui: UI) -> None:
                             p.service = d["service"] if not p.tls else p.service
                         if d.get("product"):
                             p.product = d["product"]
+                            p.identification_source = 'Nmap-enriched identification (not exploit verification)'
                             ver = services.clean_version(d.get("version"))
                             if ver:
                                 p.version = ver
@@ -273,6 +281,7 @@ async def run_scan(cfg: ScanConfig, result: ScanResult, ui: UI) -> None:
             w.vulns = vl
         result.meta["cve_sources"] = resolver.stats
         result.meta["nvd_online"] = resolver.online
+        result.meta['cve_coverage'] = resolver.coverage
         ui.ok("%d CVE match(es)" % (sum(len(p.vulns) for h in hosts for p in h.ports) + sum(len(w.vulns) for w in result.webs)))
 
     phase("Risk analysis")

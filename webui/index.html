@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="Understand your website's security posture. Check TLS, headers, cookies and common exposures, then download a detailed security report.">
-<meta name="theme-color" content="#101410"><title>VulnScan — See your exposure. Know your next move.</title>
+<meta name="theme-color" content="#101410"><title>VulnScan | Security workspace</title>
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
@@ -14,17 +14,25 @@
 <div class="pill" id="pill" role="status">Connecting</div>
 </header>
 <section class="hero" aria-labelledby="hero-title">
-<div class="hero-copy"><div class="eyebrow"><span class="status-dot"></span> SECURITY, WITH CLARITY</div>
-<h1 id="hero-title">See your exposure.<br><em>Know your next move.</em></h1>
-<p class="hero-description">A clearer view of your attack surface. Check your website, understand the findings, and leave with a report you can act on.</p>
-<div class="hero-meta"><span>01 / Enter a target</span><span>02 / Run assessment</span><span>03 / Get your report</span></div></div>
-<div class="radar-panel" aria-hidden="true"><div class="radar-top"><span>EXPOSURE MONITOR</span><span class="radar-state">STANDBY</span></div>
-<div class="radar"><div class="radar-grid"></div><div class="radar-sweep"></div><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><div class="radar-core">V<span>SCAN ENGINE</span></div><span class="radar-point point-a"></span><span class="radar-point point-b"></span><span class="radar-point point-c"></span></div>
-<div class="radar-bottom"><span>OBSERVE. UNDERSTAND. IMPROVE.</span><span>WEB / TLS / CVE</span></div></div>
+<div class="hero-copy"><div class="eyebrow"><span class="status-dot"></span> VULNSCAN / SECURITY WORKSPACE</div>
+<h1 id="hero-title">Your perimeter.<br><em>In plain sight.</em></h1>
+<p class="hero-description">Inspect the exposure. Follow the evidence.<br>A focused workspace for your next security review.</p>
+<div class="hero-meta"><span>NETWORK DISCOVERY</span><span>WEB ASSESSMENT</span><span>CVE CORRELATION</span></div></div>
+<div class="telemetry" aria-hidden="true"><div class="telemetry-head"><span class="telemetry-label">ASSESSMENT ENGINE</span><span class="radar-state">STANDBY</span></div>
+<svg viewBox="0 0 440 220" class="topology"><defs><pattern id="grid" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".8" fill="currentColor"/></pattern></defs>
+<rect width="440" height="220" fill="url(#grid)" class="grid-dots"/>
+<g class="network-lines" fill="none"><path d="M64 58H140L185 110H254L300 58H376"/><path d="M64 166H140L185 110M254 110L300 166H376"/><path d="M220 27V77M220 143V192"/></g>
+<g class="packet-lines" fill="none"><path d="M64 58H140L185 110H254L300 58H376"/><path d="M64 166H140L185 110H254L300 166H376"/></g>
+<g class="endpoint"><rect x="42" y="38" width="44" height="40" rx="9"/><rect x="42" y="146" width="44" height="40" rx="9"/><rect x="354" y="38" width="44" height="40" rx="9"/><rect x="354" y="146" width="44" height="40" rx="9"/></g>
+<g class="endpoint-icon" fill="none"><path d="M56 53H72V64H56ZM59 68H69M56 161H72M56 167H72M56 173H65M368 52L376 48L384 52V61L376 68L368 61ZM369 161H383V173H369ZM373 157H379V161"/></g>
+<rect class="core-halo" x="184" y="74" width="72" height="72" rx="22"/><rect class="core-box" x="192" y="82" width="56" height="56" rx="15"/>
+<path class="core-mark" d="M207 101L220 120L233 101M214 101L220 110L226 101" fill="none"/>
+<circle class="network-node" cx="220" cy="27" r="4"/><circle class="network-node" cx="220" cy="192" r="4"/>
+</svg><div class="telemetry-footer"><span><i></i> EVIDENCE BEFORE CONCLUSIONS</span><span>TCP / HTTP / TLS</span></div></div>
 </section>
 <div class="layout"><main>
 <section class="card scan-card" id="newscan" aria-labelledby="scan-title">
-<div class="section-top"><div><div class="eyebrow">START AN ASSESSMENT</div><h2 id="scan-title">What's in your perimeter?</h2></div><span class="chip" id="mode">Local scanner</span></div>
+<div class="section-top"><div><div class="eyebrow">01 / SCAN CONFIGURATION</div><h2 id="scan-title">Define your scope.</h2></div><span class="chip" id="mode">Local scanner</span></div>
 <label class="lbl" for="target">Website or network target</label>
 <div class="target-wrap"><span aria-hidden="true" class="target-symbol">↗</span><input id="target" type="text" autocomplete="url" spellcheck="false" placeholder="https://your-website.com" aria-describedby="targethint"></div>
 <p class="hint" id="targethint">IP, range, CIDR, hostname or website URL. Mix targets with commas.</p>
@@ -40,21 +48,22 @@
 <p class="scan-footnote" id="scanfootnote">Read-only checks. Findings are a starting point for verification, not a guarantee of security.</p>
 </section>
 <section class="card scan-live hidden" id="live" aria-labelledby="livetitle">
-<div class="row between"><div><div class="eyebrow">ASSESSMENT ENGINE</div><h2 id="livetitle">Reading the signals</h2></div><button id="cancel" class="btn danger small" type="button">Cancel</button></div>
+<div class="row between"><div><div class="eyebrow">ASSESSMENT ENGINE</div><h2 id="livetitle">Collecting evidence</h2></div><button id="cancel" class="btn danger small" type="button">Cancel</button></div>
 <div class="signal-track" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
 <div class="steps" id="steps"></div><div class="phase" id="phasename" role="status">Starting assessment…</div><div class="bar"><div id="barfill" class="fill"></div></div><div class="row between muted"><span id="proglabel"></span><span id="elapsed">0s elapsed</span></div><pre class="term" id="term"></pre>
-</section><section class="hidden" id="results" aria-label="Assessment results"></section></main>
+</section><section id="comparison" class="hidden" aria-label="Comparison results"></section><section class="hidden" id="results" aria-label="Assessment results"></section></main>
 <aside>
-<section class="card coverage-card" id="checksnote"><div class="eyebrow">UNDER THE SURFACE</div><h2>Small signals.<br>Real consequences.</h2>
+<section class="card coverage-card" id="checksnote"><div class="eyebrow">ASSESSMENT COVERAGE</div><h2>Know what you’re checking.</h2>
 <div class="coverage-item"><span>01</span><div><h3>Transport &amp; trust</h3><p>TLS certificates, encryption and protocol support.</p></div></div>
 <div class="coverage-item"><span>02</span><div><h3>Browser defenses</h3><p>Security headers, cookie flags and mixed content.</p></div></div>
 <div class="coverage-item"><span>03</span><div><h3>Unintended exposure</h3><p>Known sensitive-file paths and version disclosures.</p></div></div>
 <div class="coverage-item"><span>04</span><div><h3>Known vulnerabilities</h3><p>Version-based CVE matches. Confirm applicability before remediation.</p></div></div>
 <div class="coverage-note" id="coveragenote">Local mode also supports network scanning and email DNS checks.</div></section>
-<section class="card history-card" id="historycard"><div class="row between"><div><div class="eyebrow">YOUR WORKSPACE</div><h2>Recent assessments</h2></div><button id="refresh" class="btn ghost small" type="button" aria-label="Refresh history">↻</button></div>
-<div id="history" class="history"><div class="empty-history"><span aria-hidden="true">↗</span><p>Your next insight starts with a scan.</p></div></div>
+<section class="card history-card" id="historycard"><div class="row between"><div><div class="eyebrow">YOUR WORKSPACE</div><h2>Assessment history</h2></div><button id="refresh" class="btn ghost small" type="button" aria-label="Refresh history">↻</button></div>
+<div id="history" class="history"><div class="empty-history"><span aria-hidden="true">↗</span><p>Completed assessments appear here.</p></div></div>
 <p class="muted hidden" id="historynote">Last 20 scans saved in this browser only. Browser data can be cleared or evicted.</p><button id="clearhistory" class="btn ghost small hidden" type="button">Clear browser history</button></section>
-<section class="report-teaser"><span class="report-icon" aria-hidden="true">↳</span><div><div class="eyebrow">BUILT TO BE SHARED</div><h3>From finding to fix.</h3><p>Executive context. Technical evidence. A clear remediation plan. Download your PDF after every assessment.</p></div></section>
+<section class="card compare-card" id="comparecard"><div class="eyebrow">VERIFY THE CHANGE</div><h2>Compare assessments</h2><p class="muted">Recheck the same website. Separate verified fixes from missing evidence.</p><label class="lbl" for="compareold">Baseline</label><select id="compareold"><option value="">No assessments yet</option></select><label class="lbl" for="comparenew">Follow-up</label><select id="comparenew"><option value="">No assessments yet</option></select><button class="btn compare-button" id="comparebtn" type="button">Compare evidence <span aria-hidden="true">↗</span></button><p class="muted" id="comparestatus" role="status"></p></section><section class="report-teaser"><span class="report-icon" aria-hidden="true">↳</span><div><div class="eyebrow">BUILT TO BE SHARED</div><h3>Built for the review.</h3><p>Executive context. Technical evidence. A clear remediation plan. Download your PDF after every assessment.</p></div></section>
 </aside></div>
 <footer class="site-footer"><a class="brand" href="/">vulnscan<span class="brand-dot">.</span></a><p>Visibility is the first step. Verification is the next.</p><span>FOR AUTHORIZED ASSESSMENTS ONLY</span></footer>
+<script src="/compare.js"></script>
 <script src="/app.js"></script></body></html>

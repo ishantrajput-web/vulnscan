@@ -29,6 +29,7 @@ class Vulnerability:
     severity: str = "info"
     source: str = "nvd"          # nvd | built-in
     url: str = ""
+    validation: str = "Potential version match; vendor applicability unverified"
 
 
 @dataclass
@@ -37,6 +38,10 @@ class Finding:
     title: str
     detail: str = ""
     remediation: str = ""
+    check_id: str = ""
+    rule_id: str = ""
+    observed_at: str = ""
+    evidence: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -51,6 +56,7 @@ class PortResult:
     tls: bool = False
     tls_version: Optional[str] = None
     tls_error: Optional[str] = None
+    identification_source: str = "port-based guess"
     vulns: List[Vulnerability] = field(default_factory=list)
     findings: List[Finding] = field(default_factory=list)
 
@@ -71,7 +77,7 @@ class HostResult:
 
 @dataclass
 class WebResult:
-    """Passive analysis of one web origin (URL)."""
+    """Non-exploitative analysis of one web origin (URL)."""
     url: str
     host_ip: str = ""                 # resolved IP (used to attach to a network host)
     standalone: bool = True           # True when scanned as a website (no network host owns it)
@@ -90,6 +96,7 @@ class WebResult:
     risk_score: int = 0
     risk_level: str = "info"
     error: Optional[str] = None
+    checks: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass

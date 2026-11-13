@@ -27,6 +27,7 @@ def scan(target, outdir, scan_id):
     result.finished = dt.datetime.now(dt.timezone.utc).isoformat()
     result.duration_s = round(time.monotonic() - started, 2)
     result.meta = {"mode": "serverless", "cve_source": "built-in offline database",
+                   "cve_coverage": resolver.coverage,
                    "dns_checks": False, "history": "this browser only"}
     finalize(result)
     files, notes = write_reports(result, outdir, list(FORMATS))

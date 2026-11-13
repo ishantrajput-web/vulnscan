@@ -1,5 +1,6 @@
 """One evidence-based explanation/chart contract shared by every report format."""
 from collections import Counter
+import json
 
 from report.scoring import ORDER, summarize
 
@@ -52,8 +53,11 @@ def assessment(result):
     def add(asset, item, cve=False):
         title = item.cve_id if cve else item.title
         why, verify = explain(title, cve)
+        proof = item.description if cve else item.detail
+        if not cve and item.evidence:
+            proof += '\nObserved at: ' + item.observed_at + '\nCheck: ' + item.check_id + '\n' + json.dumps(item.evidence, ensure_ascii=True, sort_keys=True)
         observations.append({'id':'OBS-%03d' % (len(observations)+1), 'asset':asset, 'kind':'cve_match' if cve else 'finding',
-            'severity':item.severity, 'title':title, 'evidence':item.description if cve else item.detail,
+            'severity':item.severity, 'title':title, 'evidence':proof,
             'recommended_action':verify if cve else (item.remediation or verify), 'why_it_matters':why,
             'how_to_verify':verify, 'category':category(title,cve), 'priority':PRIORITY.get(item.severity,'Context'),
             'source':item.source if cve else 'scanner observation', 'reference':item.url if cve else '',
@@ -70,7 +74,9 @@ def assessment(result):
         for item in web.findings: add(web.url,item)
         for item in web.vulns: add(web.url,item,True)
     observations.sort(key=lambda x: ORDER.index(x['severity']) if x['severity'] in ORDER else 4)
-    incomplete = bool(result.meta.get('error') or result.meta.get('interrupted') or not summary['assets'] or any(w.error or w.status is None for w in result.webs))
+    check_rows = [dict(check, asset=w.url) for w in result.webs for check in w.checks]
+    check_counts = {key: sum(c['status'] == key for c in check_rows) for key in ('issue', 'no_issue', 'failed', 'skipped')}
+    incomplete = bool(result.meta.get('error') or result.meta.get('interrupted') or not summary['assets'] or any(w.error or w.status is None for w in result.webs) or check_counts['failed'])
     highest = next((s for s in ORDER if any(x['severity']==s for x in observations)), 'info')
     actions = []
     for item in observations:
@@ -106,6 +112,7 @@ def assessment(result):
             'highest_observation_severity':highest, 'aggregate_risk_indicator':None if incomplete else max([0]+[a['risk_score'] or 0 for a in assets]),
             'non_informational_observations':actionable, 'informational_observations':sum(x['severity']=='info' for x in observations),
             'observations':observations, 'actions':actions, 'assets':assets, 'charts':charts, 'glossary':DEFINITIONS,
+            'checks':check_rows, 'check_counts':check_counts, 'cve_coverage':result.meta.get('cve_coverage', {}),
             'reading_order':['Read the conclusion and response availability.', 'Use severity and topic charts to choose what to review.',
                              'Validate each observation, apply the recommended change, then repeat the same scan.'],
             'limitations':['Baseline, point-in-time checks only; not an authenticated penetration test or security certification.',

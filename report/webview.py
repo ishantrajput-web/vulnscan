@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from typing import List, Tuple
+from collections import Counter
+import json
 
 from models import WebResult
 
@@ -12,7 +14,7 @@ def summary_rows(w: WebResult) -> List[Tuple[str, str]]:
     rows = [("URL", w.url)]
     if w.error:
         rows.append(("Result", "Could not analyse: " + w.error))
-        return rows
+        return rows + check_rows(w)
     if w.final_url and w.final_url != w.url:
         rows.append(("Final URL", w.final_url))
     rows.append(("HTTP status", str(w.status) if w.status is not None else "-"))
@@ -42,10 +44,12 @@ def summary_rows(w: WebResult) -> List[Tuple[str, str]]:
             cert.append("trusted: " + ("yes" if t.get("valid") else "NO (%s)" % (t.get("error") or "unknown")))
             rows.append(("Certificate", "; ".join(cert)))
     if w.dns:
-        rows.append(("Email security", "SPF: %s, DMARC: %s" % ("yes" if w.dns.get("spf") else "NO", "yes" if w.dns.get("dmarc") else "NO")))
+        def dns_state(name):
+            return 'UNKNOWN' if w.dns.get(name + '_error') else ('present' if w.dns.get(name) else 'not found')
+        rows.append(("Email security", "SPF: %s, DMARC: %s" % (dns_state('spf'), dns_state('dmarc'))))
     if w.cookies:
         rows.append(("Cookies", ", ".join(c["name"] for c in w.cookies)[:200]))
-    return rows
+    return rows + check_rows(w)
 
 
 def findings(w: WebResult):
@@ -56,3 +60,17 @@ def findings(w: WebResult):
 
 def cve_rows(w: WebResult):
     return sorted(w.vulns, key=lambda v: -(v.cvss or 0))
+
+
+
+def check_rows(w):
+    rows = []
+    if w.checks:
+        counts = Counter(c['status'] for c in w.checks)
+        rows.append(('Check coverage', ', '.join('%s: %d' % (s.replace('_', ' '), counts[s]) for s in ('issue', 'no_issue', 'failed', 'skipped'))))
+        for check in w.checks:
+            rows.append(('Check ' + check['id'], '%s | %s | %s%s' % (
+                check['status'].replace('_', ' '), check['observed_at'],
+                json.dumps(check.get('evidence', {}), sort_keys=True),
+                (' | ' + check['error']) if check.get('error') else '')))
+    return rows

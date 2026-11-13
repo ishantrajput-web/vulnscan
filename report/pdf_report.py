@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import os
 import re
+import json
 from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.platypus import Flowable, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import Flowable, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from models import ScanResult
 from report.scoring import summarize
@@ -17,11 +18,11 @@ from report import webview
 from report.insights import assessment, explain
 
 SEV = ['critical', 'high', 'medium', 'low', 'info']
-INK = colors.HexColor('#141c16')
-LIME = colors.HexColor('#d0f58a')
-MUTED = colors.HexColor('#62705f')
-LINE = colors.HexColor('#dce2d7')
-PAPER = colors.HexColor('#f5f7f0')
+INK = colors.HexColor('#101c30')
+LIME = colors.HexColor('#9dc1fb')
+MUTED = colors.HexColor('#596b84')
+LINE = colors.HexColor('#d9e2ef')
+PAPER = colors.HexColor('#f3f6fa')
 COL = {'critical': colors.HexColor('#8d3199'), 'high': colors.HexColor('#b33e31'),
        'medium': colors.HexColor('#946311'), 'low': colors.HexColor('#29658d'), 'info': MUTED}
 _CTRL = re.compile(r'[\x00-\x08\x0b-\x1f\x7f-\x9f]')
@@ -70,13 +71,13 @@ class Cover(Flowable):
         c, w, h, r = self.canv, self.width, self.height, self.result
         c.setFillColor(LIME); c.setFont('Helvetica-Bold', 25); c.drawString(0, h - 32, 'vulnscan.')
         c.setFont('Courier', 8); c.drawRightString(w, h - 25, 'SECURITY ASSESSMENT / ' + ('SAMPLE' if r.meta.get('sample') else 'REPORT'))
-        c.setStrokeColor(colors.HexColor('#3b4939')); c.line(0, h - 55, w, h - 55)
-        title = Paragraph('Exposure,<br/>understood.', ParagraphStyle('cover-title', fontName='Helvetica', fontSize=49, leading=53, textColor=colors.HexColor('#f0f0e6')))
+        c.setStrokeColor(colors.HexColor('#354b68')); c.line(0, h - 55, w, h - 55)
+        title = Paragraph('Exposure,<br/>understood.', ParagraphStyle('cover-title', fontName='Helvetica', fontSize=49, leading=53, textColor=colors.HexColor('#edf2fa')))
         title.wrap(w, 160); title.drawOn(c, 0, h - 205)
-        subtitle = Paragraph('A point-in-time view of the evidence.<br/>A clear plan for what comes next.', ParagraphStyle('cover-sub', fontName='Helvetica', fontSize=12, leading=19, textColor=colors.HexColor('#a8b6a1')))
+        subtitle = Paragraph('A point-in-time view of the evidence.<br/>A clear plan for what comes next.', ParagraphStyle('cover-sub', fontName='Helvetica', fontSize=12, leading=19, textColor=colors.HexColor('#b2c2d9')))
         subtitle.wrap(w, 60); subtitle.drawOn(c, 0, h - 267)
         cx, cy = w - 100, h - 400
-        c.setStrokeColor(colors.HexColor('#354a2d')); c.setLineWidth(.5)
+        c.setStrokeColor(colors.HexColor('#354e70')); c.setLineWidth(.5)
         for radius in (28, 51, 74, 96): c.circle(cx, cy, radius, stroke=1, fill=0)
         c.line(cx - 96, cy, cx + 96, cy); c.line(cx, cy - 96, cx, cy + 96)
         c.setStrokeColor(LIME); c.line(cx, cy, cx + 65, cy + 60)
@@ -84,9 +85,9 @@ class Cover(Flowable):
         c.setFont('Courier', 8); c.drawString(0, h - 338, 'ASSESSMENT STATUS')
         c.setFillColor(colors.white); c.setFont('Helvetica-Bold', 16)
         c.drawString(0, h - 362, 'INCOMPLETE' if self.incomplete else 'EVIDENCE COLLECTED')
-        c.setFillColor(colors.HexColor('#a8b6a1')); c.setFont('Helvetica', 10)
+        c.setFillColor(colors.HexColor('#b2c2d9')); c.setFont('Helvetica', 10)
         c.drawString(0, h - 385, '%d scope asset(s) / %.1fs scan time' % (self.summary['assets'], r.duration_s))
-        c.setStrokeColor(colors.HexColor('#3b4939')); c.line(0, 170, w, 170)
+        c.setStrokeColor(colors.HexColor('#354b68')); c.line(0, 170, w, 170)
         metadata = [('TARGET / SCOPE', r.targets), ('SCAN IDENTIFIER', r.scan_id), ('STARTED', r.started)]
         y = 149
         for label, value in metadata:
@@ -94,7 +95,7 @@ class Cover(Flowable):
             p = Paragraph(_t(str(value)[:180]), ParagraphStyle('cover-meta', fontName='Helvetica', fontSize=9, leading=12, textColor=colors.white))
             _, ph = p.wrap(w - 130, 55); p.drawOn(c, 125, y - ph + 7)
             y -= max(33, ph + 13)
-        c.setFillColor(colors.HexColor('#a8b6a1')); c.setFont('Courier', 7)
+        c.setFillColor(colors.HexColor('#b2c2d9')); c.setFont('Courier', 7)
         c.drawString(0, 8, 'PRIVATE REPORT / SHARE ONLY WITH AUTHORIZED RECIPIENTS')
 
 
@@ -111,7 +112,7 @@ class EvidenceChart(Flowable):
         left, plot = 125, width-155
         top = self.height-35
         ceiling = max([1]+[n for row in chart['rows'] for n in row['values']])
-        palette = [colors.HexColor('#244c39'), colors.HexColor('#88ac52')]
+        palette = [colors.HexColor('#234d85'), colors.HexColor('#8bb0e4')]
         c.setFont('Helvetica',7)
         for i, label in enumerate(chart['series']):
             x = left + i*170
@@ -158,6 +159,7 @@ def _finding(f, st, index):
     return [Paragraph('<font color="%s">%s</font> / F-%03d' % (col, _t(f.severity.upper()), index), st['h3']),
             Paragraph('<b>' + _t(f.title) + '</b>', st['findingtitle']),
             Paragraph(_t(f.detail) or 'No additional evidence was recorded.', st['body']),
+            Paragraph(_t(('Check: %s / Observed: %s / Evidence: %s' % (f.check_id, f.observed_at, json.dumps(f.evidence, sort_keys=True))) if f.check_id else ''), st['small']),
             Paragraph('<b>Why it matters:</b> ' + _t(why), st['body']),
             Paragraph('RECOMMENDED ACTION', st['label']),
             Paragraph(_t(f.remediation) or 'Review this observation in the context of the application.', st['body']),
@@ -211,10 +213,11 @@ def write_pdf(result: ScanResult, path: str) -> str:
         if not actionable and not all_cves:
             story.append(Paragraph('No actionable findings were recorded.' if not incomplete else 'Resolve assessment errors before drawing a remediation conclusion.', st['body']))
         for action in a['actions']:
-            story.append(Paragraph(_t(action['severity'].upper()) + ' / ' + _t(action['priority']) + ' / ' + _t(action['title']), st['h3']))
-            story.append(Paragraph('Where: ' + _t(', '.join(action['assets'])), st['small']))
-            story.append(Paragraph(_t(action['action']), st['body']))
-            story.append(Paragraph('<b>Verify the change:</b> ' + _t(action['verify']), st['small']))
+            story.append(KeepTogether([
+                Paragraph(_t(action['severity'].upper()) + ' / ' + _t(action['priority']) + ' / ' + _t(action['title']), st['h3']),
+                Paragraph('Where: ' + _t(', '.join(action['assets'])), st['small']),
+                Paragraph(_t(action['action']), st['body']),
+                Paragraph('<b>Verify the change:</b> ' + _t(action['verify']), st['small'])]))
         if all_cves:
             story.append(Paragraph('Validate and address version-based CVE matches', st['h2']))
             story.append(Paragraph('Confirm the installed product and exact build against vendor advisories. Prioritize higher CVSS/severity matches; apply supported updates or mitigations, then verify the finding is resolved. Matching a version does not prove exploitability.', st['body']))
@@ -240,28 +243,31 @@ def write_pdf(result: ScanResult, path: str) -> str:
         if not host.ports: story.append(Paragraph('No open ports found in the scanned range.', st['body']))
         for port in host.ports:
             story.append(Paragraph('%d/%s - %s' % (port.port, _t(port.protocol), _t(port.service)), st['h3']))
-            story.append(Paragraph('Product / version: ' + _t((port.product or '') + ' ' + (port.version or '')) + '. TLS: ' + str(port.tls), st['small']))
+            story.append(Paragraph('Product / version: ' + _t((port.product or '') + ' ' + (port.version or '')) + '. Identification: ' + _t(port.identification_source) + '. TLS: ' + str(port.tls), st['small']))
             if port.banner: story.append(Paragraph('<b>Banner:</b> ' + _t(port.banner), st['small']))
             for f in sorted(port.findings, key=lambda x: SEV.index(x.severity) if x.severity in SEV else 4):
                 finding_index += 1; story.extend(_finding(f, st, finding_index))
             for v in sorted(port.vulns, key=lambda x: -(x.cvss or 0)): story.extend(_cve(v, st))
     story.append(PageBreak()); section('05' if a['actions'] or incomplete else '04', 'Scope, method & limits.')
     for label, value in [('Full target scope', result.targets), ('Scan identifier', result.scan_id), ('Tool version', result.tool_version), ('Started', result.started), ('Finished', result.finished), ('Duration', '%.2f seconds' % result.duration_s)]:
-        story.append(Paragraph('<b>' + _t(label) + ':</b> ' + _t(value), st['body']))
+        story.append(Paragraph('<b>' + _t(label) + ':</b> ' + _t(value), st['small']))
     hosted = result.meta.get('mode') == 'serverless'
     method = ('Hosted website mode performs read-only HTTP requests for TLS, headers, cookie flags, version disclosures and a fixed set of known exposure paths. It accepts one public HTTP(S) website on port 80 or 443. Private, loopback, reserved and metadata addresses are blocked at connection time. Email DNS, network port scans and live NVD queries are not performed. CVE correlation uses the built-in offline database.' if hosted else
               'Local mode supports host discovery, TCP connect scans, banner fingerprinting and website checks. Nmap and live NVD enrichment depend on scan configuration and availability. Only the configured and reachable scope is represented in the evidence above.')
-    story.append(Paragraph('Methodology', st['h2'])); story.append(Paragraph(_t(method), st['body']))
+    coverage = result.meta.get('cve_coverage')
+    if coverage:
+        story.append(Paragraph('CVE coverage: %s offline rules; up to %s matches per service. %s.' % (coverage['offline_rule_count'], coverage['max_matches_per_service'], _t(coverage['matching'])), st['small']))
+    story.append(Paragraph('Methodology', st['h2'])); story.append(Paragraph(_t(method), st['small']))
     story.append(Paragraph('Limitations and interpretation', st['h2']))
     for term in a['glossary']:
-        story.append(Paragraph('<b>' + _t(term['term']) + ':</b> ' + _t(term['meaning']), st['body']))
+        story.append(Paragraph('<b>' + _t(term['term']) + ':</b> ' + _t(term['meaning']), st['small']))
     for text in ('This is a baseline, point-in-time assessment. It does not include authenticated application testing, exploitation, business-logic testing or a comprehensive penetration test.',
                  'Version-based CVE correlation can produce false positives when vendors back-port fixes. Hidden versions and incomplete detection can produce false negatives. Confirm every match with vendor guidance.',
                  'A failed, blocked, unreachable or interrupted check is not evidence of safety. The report does not certify compliance or guarantee that all vulnerabilities have been found.',
                  'Risk scores summarize observed signals. They are not industry certifications, exploit likelihood estimates or a replacement for a qualified assessment.',
                  'Hosted report files are generated temporarily and returned to the requesting browser. Browser history is device- and origin-specific, can be cleared or evicted, and is not a cloud backup.',
                  'Only test systems you own or have written permission to assess. Share this report only with authorized recipients.'):
-        story.append(Paragraph(_t(text), st['body']))
+        story.append(Paragraph(_t(text), st['small']))
     if result.meta.get('interrupted') or result.meta.get('error'):
         story.append(Paragraph('Execution notes: ' + _t(result.meta.get('error') or 'Scan interrupted; only partial evidence is available.'), st['callout']))
     doc.build(story, onFirstPage=_page, onLaterPages=_page)

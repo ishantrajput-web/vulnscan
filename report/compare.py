@@ -30,6 +30,46 @@ def _index(scan: Dict) -> Dict[str, Dict[int, Dict]]:
     return out
 
 
+def compare_websites(old: Dict, new: Dict) -> Dict:
+    """Only a successful matching check can establish a resolved observation."""
+    from urllib.parse import urlsplit, urlunsplit
+    def key(url):
+        p = urlsplit(url)
+        host = (p.hostname or '').lower()
+        if ':' in host: host = '[' + host + ']'
+        if p.port and p.port != (443 if p.scheme == 'https' else 80): host += ':' + str(p.port)
+        return urlunsplit((p.scheme.lower(), host, p.path or '/', p.query, ''))
+    before = {key(w['url']): w for w in old.get('webs', [])}
+    after = {key(w['url']): w for w in new.get('webs', [])}
+    output = {}
+    for url in sorted(set(before) | set(after)):
+        a, b = before.get(url, {}), after.get(url, {})
+        checks = {c['id']: c for c in b.get('checks', [])}
+        def observations(w):
+            entries = {}
+            for f in w.get('findings', []):
+                identity = (f['check_id'] + '::' + (f.get('rule_id') or f['title'])) if f.get('check_id') else f['title']
+                entries[identity] = {'title': f['title'], 'severity': f['severity'], 'check_id': f.get('check_id', ''), 'kind': 'finding'}
+            for v in w.get('vulns', []):
+                entries['cve.' + v['cve_id']] = {'title': v['cve_id'], 'severity': v['severity'], 'check_id': '', 'kind': 'potential_cve'}
+            return entries
+        previous, current = observations(a), observations(b)
+        rows = {'new': [], 'resolved': [], 'still_present': [], 'not_verified': []}
+        uncertain = bool(new.get('meta', {}).get('interrupted') or new.get('meta', {}).get('error') or b.get('error') or b.get('status') is None)
+        for identity in sorted(set(previous) | set(current)):
+            item = current.get(identity) or previous[identity]
+            if identity in current:
+                state = 'still_present' if identity in previous else 'new'
+            else:
+                check = checks.get(item['check_id'], {})
+                # CVE absence is never proof that a patch was applied.
+                state = 'resolved' if not uncertain and check.get('status') == 'no_issue' else 'not_verified'
+            rows[state].append(item)
+        rows['response'] = 'not_verified' if uncertain else 'response_recorded'
+        output[url] = rows
+    return output
+
+
 def compare_scans(old: Dict, new: Dict) -> Dict:
     o, n = _index(old), _index(new)
     diff: Dict = {"new_hosts": sorted(set(n) - set(o), key=_ipkey),
@@ -54,6 +94,7 @@ def compare_scans(old: Dict, new: Dict) -> Dict:
             entry["fixed_cves"] += [(port, v["cve_id"]) for v in op[port].get("vulns", [])]
         if any(entry[k] for k in entry):
             diff["hosts"][ip] = entry
+    diff["websites"] = compare_websites(old, new)
     return diff
 
 
@@ -78,6 +119,12 @@ def print_diff(ui: UI, d: Dict) -> int:
             ui._p(c("     + NEW  %s (port %d)" % (cve, port), "red"))
         for port, cve in e["fixed_cves"]:
             ui._p(c("     - FIXED %s (port %d)" % (cve, port), "green"))
+    for url, rows in d.get('websites', {}).items():
+        ui._p(' Website: ' + url)
+        for state in ('new', 'resolved', 'still_present', 'not_verified'):
+            for item in rows[state]:
+                ui._p('     %s: %s' % (state.replace('_', ' ').upper(), item['title']))
+                changes += 1
     if not changes:
         ui._p(" No differences between the two scans.")
     ui._p(c("=" * 62, "bold"))

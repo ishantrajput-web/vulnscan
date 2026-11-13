@@ -67,8 +67,6 @@ OFFLINE_KB = [
      "vsftpd 2.3.4 shipped with a backdoor that opens a root shell on port 6200."),
     ("openssh", lambda v: v < (7, 7), "CVE-2018-15473", 5.3,
      "OpenSSH before 7.7 allows remote username enumeration."),
-    ("openssh", lambda v: v < (9, 3, 2), "CVE-2023-38408", 9.8,
-     "OpenSSH ssh-agent PKCS#11 feature remote code execution (before 9.3p2)."),
     ("openssh", lambda v: (8, 5) <= v < (9, 8), "CVE-2024-6387", 8.1,
      "regreSSHion: unauthenticated race condition in sshd signal handling (8.5p1 to 9.7p1)."),
     ("apache httpd", lambda v: v == (2, 4, 49), "CVE-2021-41773", 7.5,
@@ -85,7 +83,7 @@ OFFLINE_KB = [
      "Exim 4.87-4.91 remote command execution via crafted recipient address."),
     ("samba", lambda v: (3, 5, 0) <= v < (4, 6, 4), "CVE-2017-7494", 9.8,
      "SambaCry: remote code execution via writable share (3.5.0 to 4.6.3)."),
-    ("iis", lambda v: v == (6, 0), "CVE-2017-7269", 9.8,
+    ("iis", lambda v: v == (6, 0, 0), "CVE-2017-7269", 9.8,
      "IIS 6.0 WebDAV ScStoragePathFromUrl buffer overflow (remote code execution)."),
     ("dropbear", lambda v: v < (2016, 74), "CVE-2016-3116", 5.5,
      "Dropbear before 2016.74 allows bypass of shell restrictions via xauth injection."),
@@ -93,9 +91,13 @@ OFFLINE_KB = [
 
 
 def _kb_lookup(product: str, version: str) -> List[Vulnerability]:
+    if not re.fullmatch(r'\d+(?:\.\d+)*(?:p\d+)?', version):
+        return []
     vt = vtuple(version)
     if not vt:
         return []
+    # Treat an omitted patch component as zero for numeric rule boundaries.
+    vt = vt + (0,) * max(0, 3 - len(vt))
     p = product.lower()
     out = []
     for kw, pred, cve, score, desc in OFFLINE_KB:
@@ -145,6 +147,12 @@ class CVEResolver:
         self._interval = 0.7 if self.api_key else 6.5   # NVD public limit: 5 req / 30 s
         self._cache = self._load()
 
+    @property
+    def coverage(self):
+        return {'offline_rule_count': len(OFFLINE_KB), 'max_matches_per_service': self.max,
+                'matching': 'Potential version matches; configuration and vendor patches unverified',
+                'online_enabled': self.online, 'sources': dict(self.stats)}
+
     # ---- cache ----
     def _load(self) -> Dict:
         try:
@@ -166,9 +174,11 @@ class CVEResolver:
 
     # ---- NVD ----
     def _nvd_query(self, vendor: str, product: str, version: str) -> Optional[List[Vulnerability]]:
-        m = re.match(r"\d+(?:\.\d+)*", version)
-        ver = m.group(0) if m else version
-        cpe = "cpe:2.3:a:%s:%s:%s" % (vendor, product, ver)
+        m = re.fullmatch(r'(\d+(?:\.\d+)*)(p\d+)?', version)
+        if not m:
+            return None  # Do not silently discard an unfamiliar vendor suffix.
+        ver, update = m.group(1), m.group(2) or '*'
+        cpe = 'cpe:2.3:a:%s:%s:%s:%s:*:*:*:*:*:*' % (vendor, product, ver, update)
         url = NVD_URL + "?" + urllib.parse.urlencode(
             {"virtualMatchString": cpe, "resultsPerPage": 1000})
         headers = {"User-Agent": "VulnScan/1.0", "Accept": "application/json"}
@@ -215,7 +225,7 @@ class CVEResolver:
     def lookup(self, product: Optional[str], version: Optional[str]) -> List[Vulnerability]:
         if not product or not version:
             return []
-        key = "%s|%s" % (product.lower(), version)
+        key = "v2|%s|%s" % (product.lower(), version)
         results: Dict[str, Vulnerability] = {}
         cached = self._cache.get(key)
         if cached and time.time() - cached.get("t", 0) < CACHE_TTL:
@@ -227,7 +237,7 @@ class CVEResolver:
                     continue
         else:
             nvd_ok = False
-            cands = _cpe_candidates(product)
+            cands = _cpe_candidates(product) if re.fullmatch(r'\d+(?:\.\d+)*(?:p\d+)?', version) else []
             if self.online and cands:
                 collected: List[Vulnerability] = []
                 ok_any = False

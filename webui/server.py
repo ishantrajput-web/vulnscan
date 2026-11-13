@@ -39,7 +39,7 @@ ID_RE = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{4}$")
 PHRASE = "I HAVE PERMISSION"
 MIME = {"json": "application/json", "html": "text/html; charset=utf-8", "pdf": "application/pdf",
         "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
-STATIC = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "application/javascript; charset=utf-8"),
+STATIC = {"/compare.js": ("compare.js", "application/javascript; charset=utf-8"), "/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "application/javascript; charset=utf-8"),
           "/app.css": ("app.css", "text/css; charset=utf-8")}
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src data:; "
        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
@@ -260,7 +260,7 @@ class Server(ThreadingHTTPServer):
                 files = [fm for fm in FORMATS if os.path.isfile(os.path.join(self.outdir, "report_%s.%s" % (sid, fm)))]
                 out.append({"id": sid, "targets": d.get("targets", ""), "started": d.get("started", ""),
                             "assets": s.get("assets", 0), "cves": s.get("cves", 0),
-                            "levels": s.get("host_levels", {}), "files": files})
+                            "levels": s.get("host_levels", {}), "assessment_status": d.get("assessment", {}).get("status"), "files": files})
             except (OSError, ValueError):
                 continue
         return out
