@@ -10,7 +10,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # Python 3.9 is unavailable on the rolling Ubuntu 26.04 image.
+        os: [ubuntu-22.04, windows-latest, macos-latest]
         python-version: ["3.9", "3.12", "3.14"]
     steps:
       - uses: actions/checkout@v4
