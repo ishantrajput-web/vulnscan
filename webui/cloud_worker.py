@@ -19,7 +19,7 @@ def scan(target, outdir, scan_id):
     started = time.monotonic()
     result = ScanResult(scan_id=scan_id, tool_version=__version__, targets=target,
                         started=dt.datetime.now(dt.timezone.utc).isoformat())
-    web = webcheck.analyze(target, timeout=3.0, do_dns=False, public_only=True)
+    web = webcheck.analyze(target, timeout=5.0, do_dns=False, public_only=True)
     result.webs = [web]
     resolver = CVEResolver(cache_dir=outdir, online=False)
     for tech in web.techs:
@@ -46,3 +46,4 @@ if __name__ == "__main__":
     payload = scan(target, outdir, scan_id)
     with open(os.path.join(outdir, "response.json"), "w", encoding="utf-8") as stream:
         json.dump(payload, stream)
+

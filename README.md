@@ -71,11 +71,10 @@ available in **local mode**. Hosted mode uses the built-in offline CVE database.
 cannot scan your laptop's private LAN. Free hosting remains subject to Vercel Hobby usage limits;
 this mode does not require a paid backend or persistent disk.
 
-The dashboard includes a responsive midnight/cobalt/ice design, reduced-motion support, an activity
+The dashboard includes a responsive white/iris/coral design, reduced-motion support, an activity
 visualization (not fabricated scan progress), searchable severity filters and downloadable reports.
 The PDF includes an executive assessment, severity distribution, remediation plan, complete findings
-and CVE descriptions, technical evidence and explicit scope/methodology. Failed checks are marked
-incomplete rather than presented as a clean bill of health.
+and CVE descriptions, technical evidence and explicit scope/methodology. Unavailable checks retain their reasons and are shown separately from scan completion.
 
 All four export formats share `report/insights.py`: plain-language conclusions, complete observations,
 why-it-matters explanations, remediation/verification steps and chart datasets. PDF and HTML include
@@ -98,7 +97,7 @@ and limitations. Generated PDFs and verification evidence remain outside version
 
 ## Evidence and verified changes
 
-Website results include a timestamped check ledger: **Issue / note**, **No issue observed**, **Could not verify**, or **Skipped**. A failed check makes the assessment incomplete, even when other checks return findings. Exposure bodies and cookie values are not retained in website evidence. Header presence does not establish policy strength.
+Website results include a timestamped check ledger: **Issue / note**, **No issue observed**, **Could not verify**, or **Skipped**. An unavailable optional check does not discard other findings; the report retains coverage limits separately from its observed-risk indicator. Exposure bodies and cookie values are not retained in website evidence. Header presence does not establish policy strength.
 
 Findings include stable check IDs and expandable evidence. Service results distinguish port-based guesses, self-reported banner identification and optional Nmap enrichment. CVEs are potential version matches; metadata discloses offline rule coverage, sources and the result cap.
 
@@ -147,3 +146,8 @@ Web analysis is a non-exploitative baseline, not a replacement for a full web-ap
 
 ## License
 MIT - see `LICENSE`. Use responsibly.
+
+
+### Scan completion and coverage
+
+A finished scan produces a report with evaluated, unavailable and skipped checks. Optional check failures do not discard verified findings. The observed-risk score summarizes recorded issues only; unavailable checks remain explicitly documented. An unreachable or blocked target has no overall score. A repository URL scans its web page, not its source code; use the deployed application URL for a website assessment.

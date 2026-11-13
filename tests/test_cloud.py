@@ -105,7 +105,7 @@ class CloudTests(unittest.TestCase):
         web = WebResult(url="https://example.com", status=200, title="Test website", host_ip="93.184.216.34")
         with tempfile.TemporaryDirectory() as out, mock.patch.object(webcheck, "analyze", return_value=web) as analyze:
             payload = cloud_worker.scan(web.url, out, "20261028-123000-abcd")
-            analyze.assert_called_once_with(web.url, timeout=3.0, do_dns=False, public_only=True)
+            analyze.assert_called_once_with(web.url, timeout=5.0, do_dns=False, public_only=True)
             self.assertEqual(payload["result"]["summary"]["assets"], 1)
             self.assertTrue({"json", "html", "docx"}.issubset(payload["reports"]))
             import base64
@@ -139,3 +139,4 @@ class CloudTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

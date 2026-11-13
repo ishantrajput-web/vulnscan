@@ -93,17 +93,27 @@ def _public_connection(address, timeout=3.0, source_address=None, **kwargs):
         effective = getattr(ip, "ipv4_mapped", None) or ip
         if not effective.is_global:
             raise OSError("Hosted scans cannot connect to private, loopback, reserved or metadata addresses.")
-    family, kind, proto, _, sockaddr = answers[0]
-    sock = socket.socket(family, kind, proto)
-    try:
-        sock.settimeout(timeout)
-        if source_address:
-            sock.bind(source_address)
-        sock.connect(sockaddr)
-        return sock
-    except BaseException:
-        sock.close()
-        raise
+    deadline = time.monotonic() + timeout
+    last_error = OSError('No reachable public address')
+    for index, (family, kind, proto, _, sockaddr) in enumerate(answers):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        sock = socket.socket(family, kind, proto)
+        try:
+            sock.settimeout(remaining / (len(answers) - index))
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(sockaddr)
+            sock.settimeout(max(0.1, deadline - time.monotonic()))
+            return sock
+        except OSError as exc:
+            last_error = exc
+            sock.close()
+        except BaseException:
+            sock.close()
+            raise
+    raise last_error
 
 
 def fetch(url: str, timeout: float = 6.0, max_body: int = MAX_BODY, public_only: bool = False) -> Dict:

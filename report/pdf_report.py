@@ -84,7 +84,7 @@ class Cover(Flowable):
         c.setFillColor(LIME); c.circle(cx + 65, cy + 60, 3, fill=1, stroke=0)
         c.setFont('Courier', 8); c.drawString(0, h - 338, 'ASSESSMENT STATUS')
         c.setFillColor(colors.white); c.setFont('Helvetica-Bold', 16)
-        c.drawString(0, h - 362, 'INCOMPLETE' if self.incomplete else 'EVIDENCE COLLECTED')
+        c.drawString(0, h - 362, 'TARGET UNAVAILABLE' if self.incomplete else 'SCAN COMPLETED')
         c.setFillColor(colors.HexColor('#b2c2d9')); c.setFont('Helvetica', 10)
         c.drawString(0, h - 385, '%d scope asset(s) / %.1fs scan time' % (self.summary['assets'], r.duration_s))
         c.setStrokeColor(colors.HexColor('#354b68')); c.line(0, 170, w, 170)
@@ -179,7 +179,7 @@ def write_pdf(result: ScanResult, path: str) -> str:
     doc = SimpleDocTemplate(path, pagesize=A4, leftMargin=20*mm, rightMargin=20*mm, topMargin=24*mm, bottomMargin=23*mm,
                             title='VulnScan | Security Assessment', author='VulnScan', subject='Evidence, remediation and assessment scope')
     width = doc.width
-    incomplete = a['status'] == 'incomplete'
+    incomplete = a['aggregate_risk_indicator'] is None
     findings = _all_findings(result)
     all_cves = [(w.url, v) for w in result.webs for v in w.vulns] + [(h.ip + ':' + str(p.port), v) for h in result.hosts for p in h.ports for v in p.vulns]
     all_cves.sort(key=lambda row: -(row[1].cvss or 0))
@@ -272,3 +272,4 @@ def write_pdf(result: ScanResult, path: str) -> str:
         story.append(Paragraph('Execution notes: ' + _t(result.meta.get('error') or 'Scan interrupted; only partial evidence is available.'), st['callout']))
     doc.build(story, onFirstPage=_page, onLaterPages=_page)
     return os.path.abspath(path)
+

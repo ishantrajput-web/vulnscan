@@ -68,15 +68,19 @@ def assessment(result):
             for item in port.findings: add(host.ip + ':' + str(port.port),item)
             for item in port.vulns: add(host.ip + ':' + str(port.port),item,True)
     for web in result.webs:
-        unavailable = bool(web.error or web.status is None)
+        unavailable = bool(web.error or web.status is None or not 200 <= web.status < 300)
         assets.append({'asset':web.url, 'kind':'website', 'risk_score':None if unavailable else web.risk_score,
-                       'risk_level':None if unavailable else web.risk_level, 'status':web.error or ('No HTTP response recorded' if unavailable else 'HTTP response recorded')})
+                       'risk_level':None if unavailable else web.risk_level,
+                       'status':web.error or ('No HTTP response recorded' if web.status is None else 'HTTP %d response recorded' % web.status)})
         for item in web.findings: add(web.url,item)
         for item in web.vulns: add(web.url,item,True)
     observations.sort(key=lambda x: ORDER.index(x['severity']) if x['severity'] in ORDER else 4)
     check_rows = [dict(check, asset=w.url) for w in result.webs for check in w.checks]
     check_counts = {key: sum(c['status'] == key for c in check_rows) for key in ('issue', 'no_issue', 'failed', 'skipped')}
-    incomplete = bool(result.meta.get('error') or result.meta.get('interrupted') or not summary['assets'] or any(w.error or w.status is None for w in result.webs) or check_counts['failed'])
+    unavailable = bool(result.meta.get('error') or result.meta.get('interrupted') or not summary['assets'] or
+                       any(w.error or w.status is None or not 200 <= w.status < 300 for w in result.webs))
+    coverage_limited = bool(unavailable or check_counts['failed'])
+    completed_checks = check_counts['issue'] + check_counts['no_issue']
     highest = next((s for s in ORDER if any(x['severity']==s for x in observations)), 'info')
     actions = []
     for item in observations:
@@ -97,19 +101,23 @@ def assessment(result):
         'rows':[{'label':k,'values':[v]} for k,v in sorted(counts.items(),key=lambda kv:(-kv[1],kv[0]))]}
     charts = [severity,categories]
     if result.webs:
-        responded = sum(w.error is None and w.status is not None for w in result.webs)
+        responded = sum(w.error is None and w.status is not None and 200 <= w.status < 300 for w in result.webs)
         charts.append({'id':'responses', 'title':'Did the websites return usable responses?',
             'description':'Response availability only. A response is not a passed security test; unavailable targets must not be treated as safe.',
             'unit':'websites','series':['Websites'], 'rows':[{'label':'Response recorded','values':[responded]}, {'label':'No usable response','values':[len(result.webs)-responded]}]})
     actionable = sum(x['severity']!='info' for x in observations)
-    if incomplete:
-        conclusion = 'Assessment incomplete. Resolve errors or missing responses before drawing a security conclusion. An empty findings list does not establish safety.'
+    if unavailable:
+        conclusion = 'Report generated. A target did not return a usable page, or the scan was interrupted. Review the recorded response and retry; no overall risk score is assigned.'
     elif actionable:
         conclusion = '%d non-informational finding(s) and CVE match(es) were recorded. Highest individual severity: %s. Validate and address the prioritized actions below.' % (actionable,highest)
     else:
         conclusion = 'No non-informational issues were recorded by the checks performed. Review the informational notes and scope limitations; this is not a security guarantee.'
-    return {'version':2, 'status':'incomplete' if incomplete else 'evidence_collected', 'conclusion':conclusion,
-            'highest_observation_severity':highest, 'aggregate_risk_indicator':None if incomplete else max([0]+[a['risk_score'] or 0 for a in assets]),
+    if check_counts['failed']:
+        conclusion += ' %d check(s) could not be verified; their reasons are recorded in check coverage. The observed-risk indicator excludes unavailable checks and is not an all-clear rating.' % check_counts['failed']
+    return {'version':3, 'status':'target_unavailable' if unavailable else 'completed', 'conclusion':conclusion,
+            'coverage_status':'limited' if coverage_limited else 'recorded',
+            'completed_checks':completed_checks,
+            'highest_observation_severity':highest, 'aggregate_risk_indicator':None if unavailable else max([0]+[a['risk_score'] or 0 for a in assets]),
             'non_informational_observations':actionable, 'informational_observations':sum(x['severity']=='info' for x in observations),
             'observations':observations, 'actions':actions, 'assets':assets, 'charts':charts, 'glossary':DEFINITIONS,
             'checks':check_rows, 'check_counts':check_counts, 'cve_coverage':result.meta.get('cve_coverage', {}),
@@ -119,3 +127,4 @@ def assessment(result):
                            'CVE matches depend on observed versions and database coverage; back-ported fixes and hidden versions can affect accuracy.',
                            ('Hosted mode omits network scans, email DNS checks and live NVD queries; it uses the built-in CVE database.' if result.meta.get('mode')=='serverless' else 'Local checks and enrichment depend on the selected options, reachable scope and installed tools.'),
                            'Charts summarize recorded data, not all possible vulnerabilities. No historical trend is inferred from one scan.']}
+

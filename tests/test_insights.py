@@ -29,7 +29,7 @@ class InsightTests(unittest.TestCase):
         self.assertIn('not a security guarantee', a['conclusion'])
         r.webs[0].status = None
         a = assessment(r)
-        self.assertEqual(a['status'], 'incomplete')
+        self.assertEqual(a['status'], 'target_unavailable')
         self.assertIsNone(a['aggregate_risk_indicator'])
         self.assertEqual(a['charts'][2]['rows'][1]['values'], [1])
 
@@ -60,3 +60,4 @@ class InsightTests(unittest.TestCase):
                 for phrase in ('EVIDENCE-END','CVE-END','Why it matters','How to verify','security.txt'):
                     self.assertIn(phrase, xml)
                     self.assertIn(phrase, html)
+

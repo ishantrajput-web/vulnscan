@@ -43,7 +43,7 @@ def write_html(result, path):
 +</style></head><body>'''.replace('\n+','\n')]
     h.append('<header><div class="wrap"><div class="brand">vulnscan.</div><h1>Your security assessment,<br>explained.</h1><p class="status">%s</p><p class="metadata">%s<br>Scan %s · %s</p></div></header><main class="wrap">' % (e(a['status'].replace('_',' ').upper()),e(result.targets),e(result.scan_id),e(result.started)))
     if result.meta.get('sample'): h.append('<div class="callout warning"><b>ILLUSTRATIVE SAMPLE.</b> Synthetic fixture; no real website assessment is represented.</div>')
-    h.append('<section class="card"><div class="eyebrow">01 / Start here</div><h2>What does this scan tell you?</h2><div class="callout %s">%s</div>' % ('warning' if a['status']=='incomplete' else '',e(a['conclusion'])))
+    h.append('<section class="card"><div class="eyebrow">01 / Start here</div><h2>What does this scan tell you?</h2><div class="callout %s">%s</div>' % ('warning' if a['coverage_status']=='limited' else '',e(a['conclusion'])))
     metrics = [('N/A' if a['aggregate_risk_indicator'] is None else str(a['aggregate_risk_indicator'])+'/100','Weighted risk indicator'),(s['assets'],'Scope assets'),(a['non_informational_observations'],'Non-info observations'),(a['informational_observations'],'Informational notes')]
     h.append('<div class="grid">'+''.join('<div class="metric"><b>%s</b><span>%s</span></div>'%(e(n),e(label)) for n,label in metrics)+'</div>')
     h.append('<p class="muted">Highest individual observation severity: <b>%s</b>. The risk indicator is not a security percentage or an exploit probability. Charts count recorded signals, not every possible vulnerability.</p><ol>' % e(a['highest_observation_severity']))
@@ -84,3 +84,4 @@ def write_html(result, path):
     h.append('</ul><p class="metadata small">Started: %s · Finished: %s · Duration: %.2fs · Tool: %s</p><p class="small">Private assessment data. Share only with authorized recipients.</p></section></main></body></html>'%(e(result.started),e(result.finished),result.duration_s,e(result.tool_version)))
     with open(path,'w',encoding='utf-8') as stream: stream.write(''.join(h))
     return os.path.abspath(path)
+

@@ -35,7 +35,8 @@ class PdfTests(unittest.TestCase):
         result.webs[0].findings = []
         result.webs[0].vulns = []
         text = self.render_text(result)
-        self.assertIn('INCOMPLETE', text)
+        self.assertIn('TARGET UNAVAILABLE', text)
         self.assertIn('NOT ASSESSED', text)
         self.assertIn('N/A', text)
         self.assertNotIn('No significant issues were observed', text)
+

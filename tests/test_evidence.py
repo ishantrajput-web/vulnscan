@@ -39,8 +39,10 @@ class EvidenceTests(unittest.TestCase):
         checks = {c['id']: c for c in w.checks}
         self.assertEqual(checks['exposure./.env']['status'], 'failed')
         result = ScanResult('id', '2', w.url, 'now', webs=[w])
-        self.assertEqual(assessment(result)['status'], 'incomplete')
-        self.assertIsNone(assessment(result)['aggregate_risk_indicator'])
+        self.assertEqual(assessment(result)['status'], 'completed')
+        self.assertEqual(assessment(result)['coverage_status'], 'limited')
+        self.assertIsNotNone(assessment(result)['aggregate_risk_indicator'])
+        self.assertIn('could not be verified', assessment(result)['conclusion'])
 
     def test_http_error_skips_browser_checks(self):
         w = self.scan(lambda *a, **k: response(403))
@@ -72,7 +74,7 @@ class EvidenceTests(unittest.TestCase):
         tls.assert_called_once_with('www.example.com', 443, 6.0, public_only=False)
         self.assertEqual(w.final_url, 'https://www.example.com/')
 
-    def test_redirect_loop_and_foreign_host_are_incomplete(self):
+    def test_redirect_loop_and_foreign_host_are_unavailable(self):
         for location in ('https://example.com', 'https://other.example/'):
             w = self.scan(lambda *a, **k: response(301, [('Location', location)]))
             self.assertTrue(w.error)
@@ -104,6 +106,45 @@ class EvidenceTests(unittest.TestCase):
                 r.lookup('OpenSSH', '8.2-vendor99')
                 query.assert_not_called()
                 self.assertTrue(r.online)
+
+
+    def test_blocked_page_has_no_overall_score(self):
+        w = self.scan(lambda *a, **k: response(403))
+        a = assessment(ScanResult('id', '2', w.url, 'now', webs=[w]))
+        self.assertEqual(a['status'], 'target_unavailable')
+        self.assertIsNone(a['aggregate_risk_indicator'])
+        self.assertIsNone(a['assets'][0]['risk_score'])
+
+    def test_failed_optional_check_keeps_real_findings_in_exports(self):
+        from report.writer import write_reports
+        from pypdf import PdfReader
+        import zipfile
+        w = self.scan(tls={'valid':True, 'legacy_status':'failed', 'legacy_error':'protocol unavailable'})
+        r = ScanResult('id', '2', w.url, 'now', webs=[w])
+        with tempfile.TemporaryDirectory() as folder:
+            files, notes = write_reports(r, folder, ['json','html','docx','pdf'])
+            self.assertFalse(notes)
+            self.assertEqual(json.loads(Path(files['json']).read_text())['assessment']['status'], 'completed')
+            html = Path(files['html']).read_text()
+            with zipfile.ZipFile(files['docx']) as doc:
+                word = doc.read('word/document.xml').decode()
+            pdf = '\n'.join(page.extract_text() for page in PdfReader(files['pdf']).pages)
+            for text in (html, word, pdf):
+                self.assertIn('could not be verified', text)
+                self.assertIn('protocol unavailable', text)
+                self.assertNotIn('INCOMPLETE', text)
+            self.assertIn('SCAN COMPLETED', pdf)
+
+    def test_public_connection_tries_next_validated_address(self):
+        answers = [(socket.AF_INET6, socket.SOCK_STREAM, 6, '', ('2606:4700::1111',443,0,0)),
+                   (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('1.1.1.1',443))]
+        first, second = mock.Mock(), mock.Mock()
+        first.connect.side_effect = OSError('Network unreachable')
+        with mock.patch.object(socket, 'getaddrinfo', return_value=answers), \
+             mock.patch.object(socket, 'socket', side_effect=[first,second]):
+            self.assertIs(webcheck._public_connection(('example.com',443)), second)
+        first.close.assert_called_once()
+        second.connect.assert_called_once_with(('1.1.1.1',443))
 
     def test_cookie_values_are_absent(self):
         w = self.scan(lambda *a, **k: response(headers=[('Set-Cookie', 'session=never-store-this; HttpOnly')]))
